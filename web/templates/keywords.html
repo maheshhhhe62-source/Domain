@@ -14,8 +14,8 @@
                 <span class="navbar-title">SPIDEY</span>
             </a>
             <div class="navbar-links">
-                <a href="/dashboard" class="navbar-link">🏠</a>
-                <a href="/keywords" class="navbar-link">🥇 Keywords</a>
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <a href="/keywords" class="navbar-link active">🥇 Keywords</a>
                 <a href="/dorks" class="navbar-link">🥈 Dorks</a>
                 <a href="/logout" class="navbar-link">🚪</a>
             </div>
@@ -24,7 +24,7 @@
 
     <div class="container">
         <h1 class="text-glow">🥇 Keywords Generator</h1>
-        <p class="card-sub">Enter seed brands/keywords — bot jaisa output</p>
+        <p class="card-sub">Enter seed brands/keywords (manual) — bot jaisa</p>
 
         {% if last %}
         <div class="alert alert-info" style="margin-top: 1rem;">
@@ -36,25 +36,43 @@
         <div class="card" style="margin-top: 1.5rem;">
             <label>🔢 How Many Keywords?</label>
             <input type="number" id="count" value="1000" min="100" max="1000000">
+            <p class="card-sub" style="margin-top: 0.5rem;">
+                Default 1000, Max 1,000,000
+            </p>
         </div>
 
         <div class="card" style="margin-top: 1.5rem;">
-            <label>📤 Enter Seeds</label>
-            <p class="card-sub">Comma-separated or one per line</p>
-            <textarea id="seedsInput" placeholder="shop, payment, login, admin, cart, order"></textarea>
+            <label>📤 Enter Seeds (Manual)</label>
+            <p class="card-sub" style="margin-bottom: 0.75rem;">
+                Comma-separated or one per line
+            </p>
+            <textarea id="seedsInput" placeholder="shop, payment, login, admin, cart, order
+
+OR line by line:
+shop
+payment
+login
+admin
+cart"></textarea>
             <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
                 <input type="file" id="fileInput" accept=".txt" onchange="loadFile(event)" style="display: none;">
-                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">📁 Upload</button>
-                <button class="btn btn-secondary" onclick="document.getElementById('seedsInput').value=''">🗑 Clear</button>
-                <button class="btn btn-secondary" onclick="loadDefault()">✨ Default</button>
+                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                    📁 Upload .txt
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('seedsInput').value=''">
+                    🗑 Clear
+                </button>
+                <button class="btn btn-secondary" onclick="loadDefault()">
+                    ✨ Load Default Seeds
+                </button>
             </div>
         </div>
 
-        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem;" onclick="generateKeywords()" id="genBtn">
+        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem; font-size: 1.1rem;" 
+                onclick="generateKeywords()" id="genBtn">
             🚀 GENERATE KEYWORDS
         </button>
 
-        <!-- Progress Box with STOP -->
         <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
             <div class="flex justify-between items-center">
                 <h3 id="progressTitle">⏳ Generating...</h3>
@@ -73,28 +91,25 @@
         <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
     </div>
 
-    <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
     <script>
         let currentTaskId = null;
         let pollInterval = null;
 
-        // ═══════════════════════════════════════
-        // TOAST NOTIFICATIONS
-        // ═══════════════════════════════════════
         function toast(msg, type = 'info') {
             const c = document.getElementById('toastContainer');
+            if (!c) return;
             const t = document.createElement('div');
             t.className = 'toast ' + type;
             t.textContent = msg;
             c.appendChild(t);
-            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 4000);
+            setTimeout(() => {
+                t.style.opacity = '0';
+                setTimeout(() => t.remove(), 300);
+            }, 4000);
         }
 
-        // ═══════════════════════════════════════
-        // FILE HANDLING
-        // ═══════════════════════════════════════
         function loadFile(e) {
             const f = e.target.files[0];
             if (!f) return;
@@ -108,16 +123,17 @@
                 'shop, payment, checkout, login, admin, cart, order, billing, account, credit';
         }
 
-        // ═══════════════════════════════════════
-        // GENERATE
-        // ═══════════════════════════════════════
         async function generateKeywords() {
             const seeds = document.getElementById('seedsInput').value.trim();
             if (!seeds) { toast('Enter seeds first!', 'error'); return; }
-            
             const count = document.getElementById('count').value;
+
             document.getElementById('genBtn').disabled = true;
             document.getElementById('genBtn').textContent = '⏳ Working...';
+            document.getElementById('progressBox').classList.remove('hidden');
+            document.getElementById('stopBtn').style.display = 'inline-flex';
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('stopBtn').textContent = '⛔ STOP';
 
             const fd = new FormData();
             fd.append('seeds', seeds);
@@ -127,9 +143,8 @@
                 const r = await fetch('/api/keywords/generate', { method: 'POST', body: fd });
                 const d = await r.json();
                 if (d.error) { toast(d.error, 'error'); reset(); return; }
-                
                 currentTaskId = d.task_id;
-                document.getElementById('stopBtn').style.display = 'inline-flex';
+                toast('Generation started', 'info');
                 startPolling(d.task_id);
             } catch (e) {
                 toast('Network error', 'error');
@@ -145,35 +160,28 @@
             document.getElementById('stopBtn').textContent = '⛔ STOP';
         }
 
-        // ═══════════════════════════════════════
-        // STOP BUTTON
-        // ═══════════════════════════════════════
         async function stopScan() {
             if (!currentTaskId) return;
-            if (!confirm('Bhai, scan rokna hai?')) return;
+            if (!confirm('Rok du?')) return;
             try {
                 await fetch(`/api/task/${currentTaskId}/cancel`, { method: 'POST' });
                 document.getElementById('stopBtn').disabled = true;
                 document.getElementById('stopBtn').textContent = '⛔ STOPPED';
                 if (pollInterval) clearInterval(pollInterval);
-                toast('Scan stopped', 'warning');
+                toast('Stopped', 'warning');
                 reset();
             } catch (e) {
                 toast('Failed to stop', 'error');
             }
         }
 
-        // ═══════════════════════════════════════
-        // POLLING (setInterval instead of while)
-        // ═══════════════════════════════════════
         function startPolling(tid) {
-            const pb = document.getElementById('progressBox');
-            pb.classList.remove('hidden');
-            
             if (pollInterval) clearInterval(pollInterval);
+            
             pollInterval = setInterval(async () => {
                 try {
                     const r = await fetch(`/api/task/${tid}`);
+                    if (!r.ok) return;
                     const t = await r.json();
                     if (!t || !t.status) { clearInterval(pollInterval); return; }
 
@@ -201,37 +209,40 @@
                             <h3 style="color: var(--success);">✅ Success!</h3>
                             <p style="margin-top: 0.5rem;">Generated: <strong>${res.count}</strong> keywords</p>
                             <div style="margin-top: 1rem;">
-                                <a href="/download/${res.file}" class="btn btn-primary">📥 Download</a>
-                                <a href="/dorks" class="btn btn-secondary" style="margin-left: 0.5rem;">🥈 Dorks →</a>
+                                <a href="/download/${res.file}" class="btn btn-primary">📥 Download File</a>
+                                <a href="/dorks" class="btn btn-secondary" style="margin-left: 0.5rem;">🥈 Generate Dorks →</a>
                             </div>
                         `;
                         toast('Keywords generated!', 'success');
                         reset();
-                    } else if (t.status === 'error' || t.status === 'cancelled') {
+                    } else if (t.status === 'error') {
                         clearInterval(pollInterval);
-                        toast('Task ' + t.status, t.status === 'cancelled' ? 'warning' : 'error');
+                        toast('Error: ' + (t.error || 'unknown'), 'error');
+                        reset();
+                    } else if (t.status === 'cancelled') {
+                        clearInterval(pollInterval);
+                        toast('Cancelled', 'warning');
                         reset();
                     }
                 } catch (e) {
-                    console.error(e);
+                    console.error('Poll error:', e);
                 }
-            }, 1500);
+            }, 1000);
         }
 
-        // ═══════════════════════════════════════
-        // AUTO-RESUME (refresh ke baad)
-        // ═══════════════════════════════════════
+        // Auto-resume on refresh
         window.addEventListener('DOMContentLoaded', async () => {
             try {
                 const r = await fetch('/api/tasks/active');
                 const d = await r.json();
-                if (d.task_id) {
+                if (d.task_id && d.task && d.task.type === 'keywords') {
                     currentTaskId = d.task_id;
-                    document.getElementById('stopBtn').style.display = 'inline-flex';
                     document.getElementById('genBtn').disabled = true;
                     document.getElementById('genBtn').textContent = '⏳ Working...';
+                    document.getElementById('progressBox').classList.remove('hidden');
+                    document.getElementById('stopBtn').style.display = 'inline-flex';
                     startPolling(d.task_id);
-                    toast('Resumed active task', 'info');
+                    toast('Resumed', 'info');
                 }
             } catch (e) {}
         });

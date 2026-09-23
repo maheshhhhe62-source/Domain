@@ -14,10 +14,10 @@
                 <span class="navbar-title">SPIDEY</span>
             </a>
             <div class="navbar-links">
-                <a href="/dashboard" class="navbar-link">🏠</a>
-                <a href="/keywords" class="navbar-link">🥇</a>
-                <a href="/dorks" class="navbar-link">🥈 Dorks</a>
-                <a href="/parser" class="navbar-link">🛰️</a>
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <a href="/keywords" class="navbar-link">🥇 Keywords</a>
+                <a href="/dorks" class="navbar-link active">🥈 Dorks</a>
+                <a href="/parser" class="navbar-link">🛰️ Parser</a>
                 <a href="/logout" class="navbar-link">🚪</a>
             </div>
         </div>
@@ -29,43 +29,66 @@
 
         {% if last %}
         <div class="alert alert-info" style="margin-top: 1rem;">
-            📋 Last: <strong>{{ last.count }}</strong> {{ last.type }} dorks
-            {% if last.file %} — <a href="/download/{{ last.file }}" style="color: var(--accent);">📥</a>{% endif %}
+            📋 Last run: <strong>{{ last.count }}</strong> {{ last.type }} dorks 
+            {% if last.file %} — <a href="/download/{{ last.file }}" style="color: var(--accent);">📥 Download</a>{% endif %}
         </div>
         {% endif %}
 
+        <!-- Dork Type -->
         <div class="card" style="margin-top: 1.5rem;">
             <label>🎯 Dork Type</label>
-            <select id="dorkType">
-                <option value="normal">📌 Normal — Standard SQLi</option>
-                <option value="hq">⭐ HQ — High quality</option>
-                <option value="country">🌍 Country — Targeted</option>
-                <option value="cms">🦨 CMS — WordPress/Joomla</option>
-                <option value="exposed">🌫️ Exposed — .env/config</option>
+            <select id="dorkType" style="margin-top: 0.5rem;">
+                <option value="normal">📌 Normal — Standard SQLi dorks</option>
+                <option value="hq">⭐ HQ — High quality SQLi dorks</option>
+                <option value="country">🌍 Country — Country-targeted</option>
+                <option value="cms">🦨 CMS — WordPress/Joomla/etc.</option>
+                <option value="exposed">🌫️ Exposed — .env / config files</option>
             </select>
         </div>
 
+        <!-- Count -->
         <div class="card" style="margin-top: 1.5rem;">
             <label>🔢 How Many Dorks?</label>
             <input type="number" id="count" value="5000" min="100" max="1000000">
+            <p class="card-sub" style="margin-top: 0.5rem;">
+                Default 5000, Max 1,000,000
+            </p>
         </div>
 
+        <!-- Keywords -->
         <div class="card" style="margin-top: 1.5rem;">
-            <label>🔑 Keywords</label>
-            <p class="card-sub">Comma-separated or one per line</p>
-            <textarea id="kwInput" placeholder="shop, payment, checkout, login, admin"></textarea>
+            <label>🔑 Enter Keywords (Manual)</label>
+            <p class="card-sub" style="margin-bottom: 0.75rem;">
+                Comma-separated or one per line. Use output from Keywords page.
+            </p>
+            <textarea id="kwInput" placeholder="shop, payment, checkout, login, admin
+
+OR line by line:
+shop
+payment
+checkout
+login"></textarea>
             <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
                 <input type="file" id="fileInput" accept=".txt" onchange="loadFile(event)" style="display: none;">
-                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">📁 Upload</button>
-                <button class="btn btn-secondary" onclick="document.getElementById('kwInput').value=''">🗑 Clear</button>
-                <button class="btn btn-secondary" onclick="loadDefault()">✨ Default</button>
+                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                    📁 Upload .txt
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('kwInput').value=''">
+                    🗑 Clear
+                </button>
+                <button class="btn btn-secondary" onclick="loadDefault()">
+                    ✨ Load Default
+                </button>
             </div>
         </div>
 
-        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem;" onclick="generateDorks()" id="genBtn">
+        <!-- Generate -->
+        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem; font-size: 1.1rem;" 
+                onclick="generateDorks()" id="genBtn">
             🚀 GENERATE DORKS
         </button>
 
+        <!-- Progress -->
         <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
             <div class="flex justify-between items-center">
                 <h3 id="progressTitle">⏳ Generating...</h3>
@@ -81,6 +104,7 @@
             <div id="logBox" class="log-box" style="margin-top: 1rem;"></div>
         </div>
 
+        <!-- Result -->
         <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
     </div>
 
@@ -92,11 +116,15 @@
 
         function toast(msg, type = 'info') {
             const c = document.getElementById('toastContainer');
+            if (!c) return;
             const t = document.createElement('div');
             t.className = 'toast ' + type;
             t.textContent = msg;
             c.appendChild(t);
-            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 4000);
+            setTimeout(() => {
+                t.style.opacity = '0';
+                setTimeout(() => t.remove(), 300);
+            }, 4000);
         }
 
         function loadFile(e) {
@@ -108,15 +136,20 @@
         }
 
         function loadDefault() {
-            document.getElementById('kwInput').value = 'shop, payment, checkout, login, admin, cart';
+            document.getElementById('kwInput').value = 
+                'shop, payment, checkout, login, admin, cart, order, billing, account, credit';
         }
 
         async function generateDorks() {
             const kws = document.getElementById('kwInput').value.trim();
-            if (!kws) { toast('Enter keywords!', 'error'); return; }
+            if (!kws) { toast('Enter keywords first!', 'error'); return; }
 
             document.getElementById('genBtn').disabled = true;
             document.getElementById('genBtn').textContent = '⏳ Working...';
+            document.getElementById('progressBox').classList.remove('hidden');
+            document.getElementById('stopBtn').style.display = 'inline-flex';
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('stopBtn').textContent = '⛔ STOP';
 
             const fd = new FormData();
             fd.append('keywords', kws);
@@ -128,7 +161,7 @@
                 const d = await r.json();
                 if (d.error) { toast(d.error, 'error'); reset(); return; }
                 currentTaskId = d.task_id;
-                document.getElementById('stopBtn').style.display = 'inline-flex';
+                toast('Generation started', 'info');
                 startPolling(d.task_id);
             } catch (e) {
                 toast('Network error', 'error');
@@ -154,16 +187,18 @@
                 if (pollInterval) clearInterval(pollInterval);
                 toast('Stopped', 'warning');
                 reset();
-            } catch (e) { toast('Failed', 'error'); }
+            } catch (e) {
+                toast('Failed to stop', 'error');
+            }
         }
 
         function startPolling(tid) {
-            const pb = document.getElementById('progressBox');
-            pb.classList.remove('hidden');
             if (pollInterval) clearInterval(pollInterval);
+            
             pollInterval = setInterval(async () => {
                 try {
                     const r = await fetch(`/api/task/${tid}`);
+                    if (!r.ok) return;
                     const t = await r.json();
                     if (!t || !t.status) { clearInterval(pollInterval); return; }
 
@@ -185,10 +220,11 @@
                     if (t.status === 'done') {
                         clearInterval(pollInterval);
                         const res = t.result || {};
-                        document.getElementById('resultBox').classList.remove('hidden');
-                        document.getElementById('resultBox').innerHTML = `
+                        const box = document.getElementById('resultBox');
+                        box.classList.remove('hidden');
+                        box.innerHTML = `
                             <h3 style="color: var(--success);">✅ Success!</h3>
-                            <p>Generated: <strong>${res.count}</strong> ${res.type} dorks</p>
+                            <p style="margin-top: 0.5rem;">Generated: <strong>${res.count}</strong> ${res.type} dorks</p>
                             <div style="margin-top: 1rem;">
                                 <a href="/download/${res.file}" class="btn btn-primary">📥 Download</a>
                                 <a href="/parser" class="btn btn-secondary" style="margin-left: 0.5rem;">🛰️ Parser →</a>
@@ -196,23 +232,32 @@
                         `;
                         toast('Dorks generated!', 'success');
                         reset();
-                    } else if (t.status === 'error' || t.status === 'cancelled') {
+                    } else if (t.status === 'error') {
                         clearInterval(pollInterval);
-                        toast('Task ' + t.status, t.status === 'cancelled' ? 'warning' : 'error');
+                        toast('Error: ' + (t.error || 'unknown'), 'error');
+                        reset();
+                    } else if (t.status === 'cancelled') {
+                        clearInterval(pollInterval);
+                        toast('Cancelled', 'warning');
                         reset();
                     }
-                } catch (e) {}
-            }, 1500);
+                } catch (e) {
+                    console.error('Poll error:', e);
+                }
+            }, 1000);
         }
 
+        // Auto-resume on refresh
         window.addEventListener('DOMContentLoaded', async () => {
             try {
                 const r = await fetch('/api/tasks/active');
                 const d = await r.json();
-                if (d.task_id) {
+                if (d.task_id && d.task && d.task.type === 'dorks') {
                     currentTaskId = d.task_id;
-                    document.getElementById('stopBtn').style.display = 'inline-flex';
                     document.getElementById('genBtn').disabled = true;
+                    document.getElementById('genBtn').textContent = '⏳ Working...';
+                    document.getElementById('progressBox').classList.remove('hidden');
+                    document.getElementById('stopBtn').style.display = 'inline-flex';
                     startPolling(d.task_id);
                     toast('Resumed', 'info');
                 }

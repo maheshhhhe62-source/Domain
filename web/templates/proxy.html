@@ -14,9 +14,9 @@
                 <span class="navbar-title">SPIDEY</span>
             </a>
             <div class="navbar-links">
-                <a href="/dashboard" class="navbar-link">🏠</a>
-                <a href="/proxy" class="navbar-link">🌊 Proxy</a>
-                <a href="/logout" class="navbar-link">🚪</a>
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
             </div>
         </div>
     </nav>
@@ -26,35 +26,52 @@
         <p class="card-sub">Add proxies manually or upload file. Check live status.</p>
 
         <div class="grid grid-2" style="margin-top: 1.5rem;">
+            <!-- Manual Add -->
             <div class="card">
-                <h3>➕ Add Manual</h3>
-                <p class="card-sub">Formats: ip:port, ip:port:user:pass, socks5://ip:port</p>
-                <textarea id="manualInput" placeholder="1.2.3.4:8080&#10;5.6.7.8:3128:user:pass&#10;socks5://9.10.11.12:1080"></textarea>
-                <div class="flex gap-2" style="margin-top: 1rem;">
+                <h3>➕ Add Proxies (Manual)</h3>
+                <p class="card-sub" style="margin-bottom: 1rem;">
+                    One per line. Formats: <code>ip:port</code>, <code>ip:port:user:pass</code>,
+                    <code>socks5://ip:port</code>
+                </p>
+                <textarea id="manualInput" placeholder="1.2.3.4:8080
+5.6.7.8:3128:user:pass
+socks5://9.10.11.12:1080
+# comment lines are skipped"></textarea>
+                <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
                     <button class="btn btn-primary" onclick="addManual()">➕ Add</button>
-                    <button class="btn btn-secondary" onclick="document.getElementById('manualInput').value=''">🗑 Clear</button>
+                    <button class="btn btn-secondary" onclick="clearInput()">🗑 Clear Input</button>
                 </div>
             </div>
 
+            <!-- File Upload -->
             <div class="card">
-                <h3>📁 Import File</h3>
-                <p class="card-sub">.txt or .zip with proxies</p>
-                <input type="file" id="fileInput" accept=".txt,.zip">
-                <button class="btn btn-primary btn-block" style="margin-top: 1rem;" onclick="uploadFile()">📤 Upload</button>
+                <h3>📁 Import From File</h3>
+                <p class="card-sub" style="margin-bottom: 1rem;">
+                    Upload .txt or .zip file with proxies (one per line)
+                </p>
+                <input type="file" id="fileInput" accept=".txt,.zip" 
+                       style="background: var(--bg-secondary); padding: 0.75rem; border-radius: 10px; border: 1px solid var(--border); color: var(--text); width: 100%;">
+                <button class="btn btn-primary btn-block" style="margin-top: 1rem;" onclick="uploadFile()">
+                    📤 Upload & Import
+                </button>
             </div>
         </div>
 
+        <!-- Stats -->
         <div class="card" style="margin-top: 1.5rem;">
             <div class="flex justify-between items-center" style="flex-wrap: wrap; gap: 1rem;">
-                <h3>📊 Total: <span id="proxyCount" style="color: var(--accent);">{{ count }}</span></h3>
+                <div>
+                    <h3>📊 Total Proxies: <span id="proxyCount" style="color: var(--accent);">{{ count }}</span></h3>
+                </div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <button class="btn btn-success" onclick="checkProxies()">✅ Check Live</button>
+                    <button class="btn btn-success" onclick="checkProxies()" id="checkBtn">✅ Check Live</button>
                     <button class="btn btn-danger" onclick="clearAll()">🗑 Clear All</button>
                     <button class="btn btn-secondary" onclick="loadList()">🔄 Refresh</button>
                 </div>
             </div>
         </div>
 
+        <!-- Progress -->
         <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
             <div class="flex justify-between items-center">
                 <h3 id="progressTitle">⏳ Checking...</h3>
@@ -67,11 +84,25 @@
                 <span id="progressText">0/0</span>
                 <span id="progressPct">0%</span>
             </div>
+            <div class="flex gap-4" style="margin-top: 1rem;">
+                <div class="stat-card" style="flex:1;">
+                    <div class="stat-icon">🔍</div>
+                    <div class="stat-value" id="checkedCount">0</div>
+                    <div class="stat-label">Checked</div>
+                </div>
+                <div class="stat-card" style="flex:1;">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-value" id="liveCount" style="color: var(--success);">0</div>
+                    <div class="stat-label">Live</div>
+                </div>
+            </div>
             <div id="logBox" class="log-box" style="margin-top: 1rem;"></div>
         </div>
 
+        <!-- Result -->
         <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
 
+        <!-- Proxy List -->
         <div class="card" style="margin-top: 1.5rem;">
             <h3>📋 Proxy List</h3>
             <div id="proxyList" style="max-height: 400px; overflow-y: auto; margin-top: 1rem;">
@@ -88,74 +119,107 @@
 
         function toast(msg, type = 'info') {
             const c = document.getElementById('toastContainer');
+            if (!c) return;
             const t = document.createElement('div');
             t.className = 'toast ' + type;
             t.textContent = msg;
             c.appendChild(t);
-            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 4000);
+            setTimeout(() => {
+                t.style.opacity = '0';
+                setTimeout(() => t.remove(), 300);
+            }, 4000);
         }
 
         async function addManual() {
             const text = document.getElementById('manualInput').value.trim();
-            if (!text) { toast('Enter proxies!', 'error'); return; }
+            if (!text) { toast('Enter proxies first!', 'error'); return; }
             const fd = new FormData();
             fd.append('proxies', text);
-            const r = await fetch('/api/proxy/add', { method: 'POST', body: fd });
-            const d = await r.json();
-            if (d.error) { toast(d.error, 'error'); return; }
-            toast(`Added ${d.added}, Total: ${d.total}`, 'success');
-            document.getElementById('manualInput').value = '';
-            loadList();
+            try {
+                const r = await fetch('/api/proxy/add', { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.error) { toast(d.error, 'error'); return; }
+                toast(`✅ Added ${d.added} (${d.duplicate} duplicates). Total: ${d.total}`, 'success');
+                document.getElementById('manualInput').value = '';
+                loadList();
+            } catch (e) {
+                toast('Network error', 'error');
+            }
         }
 
         async function uploadFile() {
             const fi = document.getElementById('fileInput');
-            if (!fi.files.length) { toast('Select file!', 'error'); return; }
+            if (!fi.files.length) { toast('Select a file!', 'error'); return; }
             const fd = new FormData();
             fd.append('file', fi.files[0]);
-            const r = await fetch('/api/proxy/import', { method: 'POST', body: fd });
-            const d = await r.json();
-            if (d.error) { toast(d.error, 'error'); return; }
-            toast(`Imported ${d.added}, Total: ${d.total}`, 'success');
-            fi.value = '';
-            loadList();
+            toast('⏳ Uploading...', 'info');
+            try {
+                const r = await fetch('/api/proxy/import', { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.error) { toast(d.error, 'error'); return; }
+                toast(`✅ Imported ${d.added}. Total: ${d.total}`, 'success');
+                fi.value = '';
+                loadList();
+            } catch (e) {
+                toast('Network error', 'error');
+            }
         }
 
         async function checkProxies() {
-            const r = await fetch('/api/proxy/check', { method: 'POST' });
-            const d = await r.json();
-            if (d.error) { toast(d.error, 'error'); return; }
-            currentTaskId = d.task_id;
-            document.getElementById('stopBtn').style.display = 'inline-flex';
-            startPolling(d.task_id);
+            try {
+                const r = await fetch('/api/proxy/check', { method: 'POST' });
+                const d = await r.json();
+                if (d.error) { toast(d.error, 'error'); return; }
+                currentTaskId = d.task_id;
+                document.getElementById('progressBox').classList.remove('hidden');
+                document.getElementById('stopBtn').style.display = 'inline-flex';
+                document.getElementById('stopBtn').disabled = false;
+                document.getElementById('stopBtn').textContent = '⛔ STOP';
+                document.getElementById('checkBtn').disabled = true;
+                toast('Checking proxies...', 'info');
+                startPolling(d.task_id);
+            } catch (e) {
+                toast('Network error', 'error');
+            }
         }
 
         async function clearAll() {
             if (!confirm('Clear ALL proxies?')) return;
-            await fetch('/api/proxy/clear', { method: 'POST' });
-            toast('All cleared', 'success');
-            loadList();
+            try {
+                await fetch('/api/proxy/clear', { method: 'POST' });
+                toast('✅ All proxies cleared', 'success');
+                loadList();
+            } catch (e) {
+                toast('Failed', 'error');
+            }
         }
 
         async function loadList() {
-            const r = await fetch('/api/proxy/list');
-            const d = await r.json();
-            document.getElementById('proxyCount').textContent = d.count;
-            const box = document.getElementById('proxyList');
-            if (!d.proxies || !d.proxies.length) {
-                box.innerHTML = '<p class="card-sub">No proxies saved yet.</p>';
-                return;
-            }
-            let html = '';
-            d.proxies.forEach((p, i) => {
-                html += `<div style="padding: 0.5rem; border-bottom: 1px solid var(--border); font-family: monospace; font-size: 0.85rem;">
-                    <span style="color: var(--text-muted);">${i+1}.</span> ${p}
-                </div>`;
-            });
-            box.innerHTML = html;
+            try {
+                const r = await fetch('/api/proxy/list');
+                const d = await r.json();
+                document.getElementById('proxyCount').textContent = d.count;
+                const box = document.getElementById('proxyList');
+                if (!d.proxies || !d.proxies.length) {
+                    box.innerHTML = '<p class="card-sub">No proxies saved yet.</p>';
+                    return;
+                }
+                let html = '';
+                d.proxies.forEach((p, i) => {
+                    html += `<div style="padding: 0.5rem; border-bottom: 1px solid var(--border); font-family: monospace; font-size: 0.85rem;">
+                        <span style="color: var(--text-dim);">${i+1}.</span> ${p}
+                    </div>`;
+                });
+                box.innerHTML = html;
+            } catch (e) {}
+        }
+
+        function clearInput() {
+            document.getElementById('manualInput').value = '';
         }
 
         function reset() {
+            document.getElementById('checkBtn').disabled = false;
             document.getElementById('stopBtn').style.display = 'none';
             document.getElementById('stopBtn').disabled = false;
             document.getElementById('stopBtn').textContent = '⛔ STOP';
@@ -163,59 +227,92 @@
 
         async function stopScan() {
             if (!currentTaskId) return;
-            if (!confirm('Rok du?')) return;
-            await fetch(`/api/task/${currentTaskId}/cancel`, { method: 'POST' });
-            document.getElementById('stopBtn').disabled = true;
-            document.getElementById('stopBtn').textContent = '⛔ STOPPED';
-            if (pollInterval) clearInterval(pollInterval);
-            toast('Stopped', 'warning');
-            reset();
+            if (!confirm('Proxy check rok du?')) return;
+            try {
+                await fetch(`/api/task/${currentTaskId}/cancel`, { method: 'POST' });
+                document.getElementById('stopBtn').disabled = true;
+                document.getElementById('stopBtn').textContent = '⛔ STOPPED';
+                if (pollInterval) clearInterval(pollInterval);
+                toast('Stopped', 'warning');
+                reset();
+            } catch (e) {
+                toast('Failed to stop', 'error');
+            }
         }
 
         function startPolling(tid) {
-            document.getElementById('progressBox').classList.remove('hidden');
             if (pollInterval) clearInterval(pollInterval);
+            
             pollInterval = setInterval(async () => {
                 try {
                     const r = await fetch(`/api/task/${tid}`);
+                    if (!r.ok) return;
                     const t = await r.json();
                     if (!t || !t.status) { clearInterval(pollInterval); return; }
 
                     const p = t.progress || {};
-                    const done = p.done || 0, total = p.total || 0;
+                    const done = p.done || 0;
+                    const total = p.total || 0;
+                    const live = p.live || 0;
                     const pct = total ? Math.round(done * 100 / total) : 0;
 
                     document.getElementById('progressBar').style.width = pct + '%';
                     document.getElementById('progressText').textContent = `${done}/${total}`;
                     document.getElementById('progressPct').textContent = pct + '%';
+                    document.getElementById('checkedCount').textContent = done;
+                    document.getElementById('liveCount').textContent = live;
                     if (p.msg) document.getElementById('progressTitle').textContent = '⏳ ' + p.msg;
+
+                    const logBox = document.getElementById('logBox');
+                    if (p.log && p.log.length) {
+                        logBox.textContent = p.log.join('\n');
+                        logBox.scrollTop = logBox.scrollHeight;
+                    }
 
                     if (t.status === 'done') {
                         clearInterval(pollInterval);
                         const res = t.result || {};
-                        toast(`Live: ${res.live || 0}/${res.checked || 0}`, 'success');
-                        document.getElementById('resultBox').classList.remove('hidden');
-                        document.getElementById('resultBox').innerHTML = `<h3>✅ Checked ${res.checked} — Live: ${res.live}</h3>`;
+                        const box = document.getElementById('resultBox');
+                        box.classList.remove('hidden');
+                        box.innerHTML = `
+                            <h3 style="color: var(--success);">✅ Check Complete!</h3>
+                            <p style="margin-top:0.5rem;">
+                                Total: <strong>${res.checked || 0}</strong> | 
+                                Live: <strong style="color: var(--success);">${res.live || 0}</strong> | 
+                                Dead: <strong style="color: var(--error);">${res.dead || 0}</strong>
+                            </p>
+                        `;
+                        toast(`Live: ${res.live}/${res.checked}`, 'success');
                         loadList();
                         reset();
-                    } else if (t.status === 'error' || t.status === 'cancelled') {
+                    } else if (t.status === 'error') {
                         clearInterval(pollInterval);
-                        toast('Task ' + t.status, t.status === 'cancelled' ? 'warning' : 'error');
+                        toast('Error: ' + (t.error || 'unknown'), 'error');
+                        reset();
+                    } else if (t.status === 'cancelled') {
+                        clearInterval(pollInterval);
+                        toast('Cancelled', 'warning');
                         reset();
                     }
-                } catch (e) {}
+                } catch (e) {
+                    console.error('Poll error:', e);
+                }
             }, 1200);
         }
 
+        // Initial load
         loadList();
 
+        // Auto-resume on page refresh
         window.addEventListener('DOMContentLoaded', async () => {
             try {
                 const r = await fetch('/api/tasks/active');
                 const d = await r.json();
-                if (d.task_id) {
+                if (d.task_id && d.task && d.task.type === 'proxy_check') {
                     currentTaskId = d.task_id;
+                    document.getElementById('progressBox').classList.remove('hidden');
                     document.getElementById('stopBtn').style.display = 'inline-flex';
+                    document.getElementById('checkBtn').disabled = true;
                     startPolling(d.task_id);
                     toast('Resumed proxy check', 'info');
                 }

@@ -14,10 +14,9 @@
                 <span class="navbar-title">SPIDEY</span>
             </a>
             <div class="navbar-links">
-                <a href="/dashboard" class="navbar-link">🏠</a>
-                <a href="/sqli" class="navbar-link active">🦠 SQLi</a>
-                <a href="/dump" class="navbar-link">🕳️ Dump</a>
-                <a href="/logout" class="navbar-link">🚪</a>
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
             </div>
         </div>
     </nav>
@@ -28,24 +27,28 @@
 
         {% if last %}
         <div class="alert alert-info" style="margin-top: 1rem;">
-            📋 Last: <strong>{{ last.tested }}</strong> tested, <strong>{{ last.vuln }}</strong> vulnerable
-            {% if last.file %} — <a href="/download/{{ last.file }}" style="color: var(--accent);">📥</a>{% endif %}
+            📋 Last run: <strong>{{ last.tested }}</strong> tested, 
+            <strong>{{ last.vuln }}</strong> vulnerable
+            {% if last.file %} — <a href="/download/{{ last.file }}" style="color: var(--accent);">Download</a>{% endif %}
         </div>
         {% endif %}
 
         <div class="card" style="margin-top: 1.5rem;">
-            <label>💉 Paste URLs (one per line)</label>
-            <textarea id="urlsInput" style="min-height: 220px;" placeholder="http://example.com/page.php?id=1&#10;http://test.com/view.php?cat=2"></textarea>
+            <h3>💉 Paste URLs (one per line)</h3>
+            <textarea id="urlsInput" placeholder="http://example.com/page.php?id=1
+http://test.com/view.php?cat=2
+http://site.com/product.php?pid=3"></textarea>
             <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
+                <button class="btn btn-primary" onclick="runScan()" id="genBtn">🚀 Start Scan</button>
                 <input type="file" id="fileInput" accept=".txt" onchange="loadFile(event)" style="display: none;">
-                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">📁 Upload</button>
-                <button class="btn btn-secondary" onclick="document.getElementById('urlsInput').value=''">🗑 Clear</button>
+                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                    📁 Upload .txt
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('urlsInput').value=''">
+                    🗑 Clear
+                </button>
             </div>
         </div>
-
-        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem;" onclick="runScan()" id="genBtn">
-            🚀 START SCAN
-        </button>
 
         <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
             <div class="flex justify-between items-center">
@@ -85,6 +88,7 @@
 
         function toast(msg, type = 'info') {
             const c = document.getElementById('toastContainer');
+            if (!c) return;
             const t = document.createElement('div');
             t.className = 'toast ' + type;
             t.textContent = msg;
@@ -105,7 +109,7 @@
 
         async function runScan() {
             const urls = document.getElementById('urlsInput').value.trim();
-            if (!urls) { toast('Paste URLs!', 'error'); return; }
+            if (!urls) { toast('Paste URLs first!', 'error'); return; }
             
             document.getElementById('genBtn').disabled = true;
             document.getElementById('genBtn').textContent = '⏳ Scanning...';
@@ -113,31 +117,26 @@
             document.getElementById('stopBtn').style.display = 'inline-flex';
             document.getElementById('stopBtn').disabled = false;
             document.getElementById('stopBtn').textContent = '⛔ STOP';
-            document.getElementById('stopBtn').className = 'btn btn-stop';
-
+            
             const fd = new FormData();
             fd.append('urls', urls);
-
+            
             try {
                 const r = await fetch('/api/sqli/scan', { method: 'POST', body: fd });
                 const d = await r.json();
-                if (d.error) { 
-                    toast(d.error, 'error'); 
-                    reset(); 
-                    return; 
-                }
+                if (d.error) { toast(d.error, 'error'); reset(); return; }
                 currentTaskId = d.task_id;
                 toast('Scan started: ' + d.total + ' URLs', 'info');
                 startPolling(d.task_id);
-            } catch (e) { 
-                toast('Network error', 'error'); 
-                reset(); 
+            } catch (e) {
+                toast('Network error', 'error');
+                reset();
             }
         }
 
         function reset() {
             document.getElementById('genBtn').disabled = false;
-            document.getElementById('genBtn').textContent = '🚀 START SCAN';
+            document.getElementById('genBtn').textContent = '🚀 Start Scan';
             document.getElementById('stopBtn').style.display = 'none';
             document.getElementById('stopBtn').disabled = false;
             document.getElementById('stopBtn').textContent = '⛔ STOP';
@@ -153,7 +152,9 @@
                 if (pollInterval) clearInterval(pollInterval);
                 toast('Stopped', 'warning');
                 reset();
-            } catch (e) { toast('Failed', 'error'); }
+            } catch (e) {
+                toast('Failed to stop', 'error');
+            }
         }
 
         function startPolling(tid) {
@@ -194,7 +195,7 @@
                             <h3 style="color: var(--success);">✅ Scan Done!</h3>
                             <p style="margin-top:0.5rem;">Tested: <strong>${res.tested}</strong> | Vulnerable: <strong style="color: var(--error);">${res.vuln}</strong></p>
                             <div style="margin-top: 1rem;">
-                                <a href="/download/${res.file}" class="btn btn-primary">📥 Download</a>
+                                <a href="/download/${res.file}" class="btn btn-primary">📥 Download Vulnerable URLs</a>
                                 <a href="/dump" class="btn btn-success" style="margin-left: 0.5rem;">🕳️ Dump →</a>
                             </div>
                         `;
@@ -212,10 +213,10 @@
                 } catch (e) {
                     console.error('Poll error:', e);
                 }
-            }, 1500);
+            }, 1200);
         }
 
-        // Auto-resume agar page refresh hua
+        // Auto-resume on page refresh
         window.addEventListener('DOMContentLoaded', async () => {
             try {
                 const r = await fetch('/api/tasks/active');
