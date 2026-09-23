@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Files — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">📁 Files Manager</h1>
+        <p class="card-sub">All your generated outputs</p>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            {% if files %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Size</th>
+                        <th>Time</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in files %}
+                    <tr>
+                        <td style="font-family: monospace; font-size: 0.8rem;">{{ f.name }}</td>
+                        <td>{{ (f.size / 1024) | round(1) }} KB</td>
+                        <td style="font-size: 0.75rem; color: var(--text-dim);">{{ f.time[:19] }}</td>
+                        <td>
+                            <a href="/download/{{ f.name }}" class="btn btn-primary btn-sm">📥 Get</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="card-sub text-center">📭 No files yet. Generate some outputs first!</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

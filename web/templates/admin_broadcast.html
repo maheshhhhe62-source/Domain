@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Broadcast</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/admin" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY ADMIN</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/admin" class="navbar-link">🧛 Admin</a>
+                <a href="/admin/users" class="navbar-link">👥 Users</a>
+                <a href="/admin/keys" class="navbar-link">🔑 Keys</a>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container" style="max-width: 700px;">
+        <h1 class="text-glow">📣 Broadcast Message</h1>
+        <p class="card-sub">Send a message to all users (total: {{ total_users }})</p>
+
+        {% if msg %}
+        <div class="alert alert-success">{{ msg }}</div>
+        {% endif %}
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <form method="POST" action="/admin/broadcast/send">
+                <div class="form-group">
+                    <label>Subject</label>
+                    <input type="text" name="subject" required 
+                           placeholder="e.g. System Update" maxlength="100">
+                </div>
+                <div class="form-group">
+                    <label>Message</label>
+                    <textarea name="message" required 
+                              placeholder="Type your message..." 
+                              style="min-height: 200px;"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">
+                    📣 Send to All Users
+                </button>
+            </form>
+        </div>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>💡 Notes</h3>
+            <ul style="padding-left: 1.5rem; margin-top: 1rem; line-height: 2;">
+                <li>Message will be shown to users on next login</li>
+                <li>Broadcast is stored and can be viewed later</li>
+                <li>Keep it short and clear</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

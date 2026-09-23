@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deep Parser — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <a href="/dorks" class="navbar-link">🥈 Dorks</a>
+                <a href="/parser" class="navbar-link">🛰️ Parser</a>
+                <a href="/proxy" class="navbar-link">🌊 Proxy</a>
+                <a href="/logout" class="navbar-link">🚪</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">🛰️ Deep Parser</h1>
+        <p class="card-sub">Convert dorks → URLs using 8 search engines</p>
+
+        <div class="alert alert-warning" style="margin-top: 1rem;">
+            ⚠️ <strong>Proxies:</strong> You have <strong>{{ proxies_count }}</strong> proxies
+            {% if proxies_count == 0 %}
+            — <a href="/proxy" style="color: var(--warning); text-decoration: underline;">Add proxies first!</a>
+            {% endif %}
+        </div>
+
+        {% if last %}
+        <div class="alert alert-info" style="margin-top: 1rem;">
+            📋 Last run: <strong>{{ last.dorks }}</strong> dorks → <strong>{{ last.urls }}</strong> URLs
+            {% if last.file %} — <a href="/download/{{ last.file }}" style="color: var(--accent);">📥 Download</a>{% endif %}
+        </div>
+        {% endif %}
+
+        <!-- Dorks Input -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <label>🪵 Enter Dorks (Manual)</label>
+            <p class="card-sub" style="margin-bottom: 0.75rem;">
+                One per line. Paste from dorks file.
+            </p>
+            <textarea id="dorksInput" style="min-height: 250px;" placeholder="inurl:.php?id= shop
+inurl:.php?cat= payment
+inurl:product.php?pid= login
+inurl:checkout.php?id= cart"></textarea>
+
+            <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
+                <input type="file" id="fileInput" accept=".txt" onchange="loadFile(event)" style="display: none;">
+                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                    📁 Upload .txt
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('dorksInput').value=''">
+                    🗑 Clear
+                </button>
+                <button class="btn btn-secondary" onclick="loadSample()">
+                    ✨ Load Sample
+                </button>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>⚙️ Options</h3>
+            <div class="grid grid-2" style="margin-top: 1rem;">
+                <div>
+                    <label>Max URLs (limit)</label>
+                    <input type="number" id="maxUrls" value="200000" min="100" max="500000">
+                </div>
+                <div>
+                    <label>Use Proxies</label>
+                    <select id="useProxies">
+                        <option value="yes">✅ Yes (recommended)</option>
+                        <option value="no">❌ No (slow, gets blocked)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Run -->
+        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem; font-size: 1.1rem;" 
+                onclick="runParser()" id="genBtn">
+            🚀 START PARSER
+        </button>
+
+        <!-- Progress -->
+        <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
+            <h3 id="progressTitle">⏳ Parsing...</h3>
+            <div class="progress-wrap">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div class="progress-info">
+                <span id="progressText">0/0</span>
+                <span id="progressPct">0%</span>
+            </div>
+
+            <!-- Live stats -->
+            <div class="flex gap-4" style="margin-top: 1rem;">
+                <div class="stat-card" style="flex: 1; padding: 1rem;">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value" id="scannedCount">0</div>
+                    <div class="stat-label">Scanned</div>
+                </div>
+                <div class="stat-card" style="flex: 1; padding: 1rem;">
+                    <div class="stat-icon">🌐</div>
+                    <div class="stat-value" id="foundCount">0</div>
+                    <div class="stat-label">URLs Found</div>
+                </div>
+                <div class="stat-card" style="flex: 1; padding: 1rem;">
+                    <div class="stat-icon">🔄</div>
+                    <div class="stat-value" id="retryCount">0</div>
+                    <div class="stat-label">Retries</div>
+                </div>
+            </div>
+
+            <div id="logBox" class="log-box" style="margin-top: 1rem;"></div>
+        </div>
+
+        <!-- Result -->
+        <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
+    </div>
+
+    <script>
+        function loadFile(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { document.getElementById('dorksInput').value = ev.target.result; };
+            r.readAsText(f);
+        }
+
+        function loadSample() {
+            document.getElementById('dorksInput').value = 
+                'inurl:.php?id= shop\ninurl:.php?cat= payment\ninurl:product.php?pid= login\ninurl:checkout.php?id= cart\ninurl:.php?id= admin';
+        }
+
+        async function runParser() {
+            const dorks = document.getElementById('dorksInput').value.trim();
+            if (!dorks) { alert('Enter dorks first!'); return; }
+            const count = dorks.split('\n').filter(l => l.trim()).length;
+            if (count > 200000) { alert('Too many dorks! Max 200,000'); return; }
+
+            document.getElementById('genBtn').disabled = true;
+            document.getElementById('genBtn').textContent = '⏳ Parsing...';
+
+            const fd = new FormData();
+            fd.append('dorks', dorks);
+
+            try {
+                const r = await fetch('/api/parser/run', { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.error) { alert('❌ ' + d.error); reset(); return; }
+                pollTask(d.task_id);
+            } catch (e) {
+                alert('❌ Network error');
+                reset();
+            }
+        }
+
+        function reset() {
+            document.getElementById('genBtn').disabled = false;
+            document.getElementById('genBtn').textContent = '🚀 START PARSER';
+        }
+
+        async function pollTask(tid) {
+            const pb = document.getElementById('progressBox');
+            pb.classList.remove('hidden');
+            const logBox = document.getElementById('logBox');
+
+            while (true) {
+                await new Promise(r => setTimeout(r, 1500));
+                const r = await fetch(`/api/task/${tid}`);
+                const t = await r.json();
+                if (!t) break;
+
+                const p = t.progress || {};
+                const done = p.done || 0, total = p.total || 0;
+                const found = p.found || 0, retries = p.retries || 0;
+                const pct = total ? Math.round(done * 100 / total) : 0;
+
+                document.getElementById('progressBar').style.width = pct + '%';
+                document.getElementById('progressText').textContent = `${done}/${total}`;
+                document.getElementById('progressPct').textContent = pct + '%';
+                document.getElementById('scannedCount').textContent = done;
+                document.getElementById('foundCount').textContent = found;
+                document.getElementById('retryCount').textContent = retries;
+                if (p.msg) document.getElementById('progressTitle').textContent = '⏳ ' + p.msg;
+
+                if (p.log && p.log.length) {
+                    logBox.textContent = p.log.join('\n');
+                    logBox.scrollTop = logBox.scrollHeight;
+                }
+
+                if (t.status === 'done') {
+                    const res = t.result || {};
+                    const box = document.getElementById('resultBox');
+                    box.classList.remove('hidden');
+                    box.innerHTML = `
+                        <h3 style="color: var(--success);">✅ Parser Done!</h3>
+                        <p style="margin-top: 0.5rem;">Dorks scanned: <strong>${res.dorks}</strong></p>
+                        <p>URLs found: <strong style="color: var(--accent);">${res.urls}</strong></p>
+                        <div style="margin-top: 1rem;">
+                            <a href="/download/${res.file}" class="btn btn-primary">📥 Download URLs</a>
+                            <a href="/sqli" class="btn btn-secondary" style="margin-left: 0.5rem;">🦠 Scan SQLi →</a>
+                            <a href="/dump" class="btn btn-success" style="margin-left: 0.5rem;">🕳️ Dump →</a>
+                        </div>
+                    `;
+                    reset();
+                    return;
+                }
+                if (t.status === 'error') {
+                    alert('❌ Error: ' + (t.error || 'unknown'));
+                    reset();
+                    return;
+                }
+            }
+        }
+    </script>
+</body>
+</html>

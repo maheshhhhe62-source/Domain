@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redeem Key — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container" style="max-width: 600px;">
+        <h1 class="text-glow text-center">🔑 Redeem License</h1>
+        <p class="card-sub text-center">Paste your license key to activate plan</p>
+
+        <div class="card" style="margin-top: 2rem;">
+            <form method="POST" action="/redeem">
+                <div class="form-group">
+                    <label>🔑 License Key</label>
+                    <input type="text" name="license_key" required 
+                           placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
+                           style="text-transform: uppercase; font-family: monospace; letter-spacing: 1px;">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" style="margin-top: 1rem;">
+                    ✨ Activate Plan
+                </button>
+            </form>
+        </div>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>💡 Notes</h3>
+            <ul style="padding-left: 1.5rem; margin-top: 1rem; line-height: 2;">
+                <li>Key format: <code>XXXXX-XXXXX-XXXXX-XXXXX</code></li>
+                <li>Each key can only be used <strong>once</strong></li>
+                <li>If you have an active plan, new plan will <strong>extend</strong> it</li>
+                <li>Keys are case-insensitive</li>
+            </ul>
+        </div>
+
+        <div class="text-center" style="margin-top: 1.5rem;">
+            <a href="/plans" class="btn btn-secondary">💎 View Plans</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logs — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta http-equiv="refresh" content="10">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">📜 Task Logs</h1>
+        <p class="card-sub">Your recent tasks (auto-refresh every 10s)</p>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            {% if tasks %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Progress</th>
+                        <th>Started</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in tasks %}
+                    <tr>
+                        <td><strong>{{ t.type }}</strong></td>
+                        <td>
+                            {% if t.status == 'done' %}
+                            <span class="badge badge-success">✅ Done</span>
+                            {% elif t.status == 'running' %}
+                            <span class="badge badge-info">⏳ Running</span>
+                            {% elif t.status == 'error' %}
+                            <span class="badge badge-error">❌ Error</span>
+                            {% elif t.status == 'cancelled' %}
+                            <span class="badge badge-warn">⛔ Cancelled</span>
+                            {% else %}
+                            <span class="badge">{{ t.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 0.8rem;">
+                            {{ t.progress.done or 0 }} / {{ t.progress.total or 0 }}
+                            {% if t.progress.found %}— found: {{ t.progress.found }}{% endif %}
+                            {% if t.progress.cards %}— CC: {{ t.progress.cards }}{% endif %}
+                            {% if t.progress.fullz %}— Fullz: {{ t.progress.fullz }}{% endif %}
+                        </td>
+                        <td style="font-size: 0.75rem; color: var(--text-dim);">
+                            {{ t.started[:19] if t.started else '' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="card-sub text-center">📭 No tasks yet. Start a scan or parse!</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

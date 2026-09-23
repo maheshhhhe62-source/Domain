@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login — Spidey Dumper</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="login-wrap">
+        <div class="login-card">
+            <div class="login-logo">🕷️</div>
+            <h1 class="login-title text-glow">SPIDEY DUMPER</h1>
+            <p class="login-sub">Premium CC/CVC Web Dumper</p>
+
+            {% if error %}
+            <div class="alert alert-error">❌ {{ error }}</div>
+            {% endif %}
+
+            {% if msg %}
+            <div class="alert alert-info">ℹ️ {{ msg }}</div>
+            {% endif %}
+
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label>👤 Username</label>
+                    <input type="text" name="username" required autofocus
+                           placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label>🔐 Password</label>
+                    <input type="password" name="password" required
+                           placeholder="Enter password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">
+                    🚀 LOGIN
+                </button>
+            </form>
+
+            <p class="login-footer">
+                No account? 
+                <a href="/register" style="color: var(--accent);">Register with key</a>
+            </p>
+            <p class="login-footer">
+                💎 Premium Web Dumper — No Flood Ban
+            </p>
+        </div>
+    </div>
+</body>
+</html>

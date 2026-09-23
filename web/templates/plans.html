@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plans — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow text-center">💎 Premium Plans</h1>
+        <p class="card-sub text-center">Choose your plan — instant activation</p>
+
+        <div class="grid grid-3" style="margin-top: 2rem;">
+            {% for code, plan in plans.items() %}
+            <div class="card" style="text-align: center;">
+                <div style="font-size: 3rem; margin-bottom: 0.5rem;">
+                    {% if 'h' in code %}⏰{% elif code == '1d' %}📅{% elif code in ['3d','7d'] %}📆{% elif code in ['15d','30d'] %}🌕{% else %}💎{% endif %}
+                </div>
+                <h2 class="text-glow">{{ plan.label }}</h2>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--accent); margin: 1rem 0;">
+                    {{ plan.price }}
+                </div>
+                <a href="/redeem" class="btn btn-primary btn-block" style="margin-top: 1rem;">
+                    🔑 Redeem Key
+                </a>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="card" style="margin-top: 2rem;">
+            <h3>💡 How to activate?</h3>
+            <ol style="padding-left: 1.5rem; margin-top: 1rem; line-height: 2;">
+                <li>Contact admin to purchase a license key</li>
+                <li>Go to <strong>🔑 Redeem</strong> page</li>
+                <li>Paste your key</li>
+                <li>Plan activates instantly ✅</li>
+            </ol>
+        </div>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>📞 Contact Admin</h3>
+            <p class="card-sub" style="margin-top: 1rem;">
+                For purchases, questions, or support, contact the admin on Telegram.
+            </p>
+        </div>
+    </div>
+</body>
+</html>

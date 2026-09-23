@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Keys</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/admin" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY ADMIN</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/admin" class="navbar-link">🧛 Admin</a>
+                <a href="/admin/users" class="navbar-link">👥 Users</a>
+                <a href="/admin/keys" class="navbar-link">🔑 Keys</a>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">🔑 License Keys</h1>
+
+        {% if msg %}
+        <div class="alert alert-info">{{ msg }}</div>
+        {% endif %}
+
+        <!-- Generate -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>➕ Generate New Keys</h3>
+            <form method="POST" action="/admin/keys/generate" style="margin-top: 1rem;">
+                <div class="grid grid-2">
+                    <div>
+                        <label>Plan</label>
+                        <select name="plan" required>
+                            {% for code, plan in plans.items() %}
+                            <option value="{{ code }}">{{ plan.label }} — {{ plan.price }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label>Count (1-100)</label>
+                        <input type="number" name="count" value="1" min="1" max="100">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary" style="margin-top: 1rem;">
+                    🔑 Generate
+                </button>
+            </form>
+        </div>
+
+        <!-- List -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>📋 All Keys ({{ keys|length }})</h3>
+            {% if keys %}
+            <div style="max-height: 600px; overflow-y: auto; margin-top: 1rem;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Key</th>
+                            <th>Plan</th>
+                            <th>Status</th>
+                            <th>Used By</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for key, data in keys %}
+                        <tr>
+                            <td style="font-family: monospace; font-size: 0.8rem;">
+                                <strong>{{ key }}</strong>
+                            </td>
+                            <td>{{ data.label or data.plan }}</td>
+                            <td>
+                                {% if data.used_by %}
+                                <span class="badge badge-warn">🔒 Used</span>
+                                {% else %}
+                                <span class="badge badge-success">✅ Free</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-size: 0.8rem;">{{ data.used_by or '—' }}</td>
+                            <td>
+                                <form method="POST" action="/admin/keys/revoke" 
+                                      onsubmit="return confirm('Revoke this key?');" style="display: inline;">
+                                    <input type="hidden" name="key" value="{{ key }}">
+                                    <button type="submit" class="btn btn-danger btn-sm">🗑 Revoke</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="card-sub text-center" style="margin-top: 1rem;">📭 No keys yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQLi Scanner — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">🦠 SQLi Scanner</h1>
+        <p class="card-sub">Test URLs for SQL injection vulnerabilities</p>
+
+        {% if last %}
+        <div class="alert alert-info" style="margin-top: 1rem;">
+            📋 Last run: <strong>{{ last.tested }}</strong> tested, 
+            <strong>{{ last.vuln }}</strong> vulnerable
+            {% if last.file %} — <a href="/download/{{ last.file }}" style="color: var(--accent);">Download</a>{% endif %}
+        </div>
+        {% endif %}
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>💉 Paste URLs (one per line)</h3>
+            <textarea id="urlsInput" placeholder="http://example.com/page.php?id=1
+http://test.com/view.php?cat=2
+http://site.com/product.php?pid=3"></textarea>
+            <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
+                <button class="btn btn-primary" onclick="runScan()">🚀 Start Scan</button>
+                <input type="file" id="fileInput" accept=".txt" onchange="loadFile(event)" style="display: none;">
+                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                    📁 Upload .txt
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('urlsInput').value=''">
+                    🗑 Clear
+                </button>
+            </div>
+        </div>
+
+        <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
+            <h3 id="progressTitle">⏳ Scanning...</h3>
+            <div class="progress-wrap">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div class="progress-info">
+                <span id="progressText">0/0</span>
+                <span id="progressPct">0%</span>
+            </div>
+            <div id="logBox" class="log-box" style="margin-top: 1rem;"></div>
+        </div>
+
+        <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
+    </div>
+
+    <script>
+        function loadFile(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => {
+                document.getElementById('urlsInput').value = ev.target.result;
+            };
+            r.readAsText(f);
+        }
+
+        async function runScan() {
+            const urls = document.getElementById('urlsInput').value.trim();
+            if (!urls) { alert('Paste URLs first!'); return; }
+            const fd = new FormData();
+            fd.append('urls', urls);
+            const r = await fetch('/api/sqli/scan', { method: 'POST', body: fd });
+            const d = await r.json();
+            if (d.error) { alert(d.error); return; }
+            pollTask(d.task_id);
+        }
+
+        async function pollTask(tid) {
+            const pb = document.getElementById('progressBox');
+            pb.classList.remove('hidden');
+            const logBox = document.getElementById('logBox');
+            logBox.textContent = '';
+
+            while (true) {
+                await new Promise(r => setTimeout(r, 1200));
+                const r = await fetch(`/api/task/${tid}`);
+                const t = await r.json();
+                if (!t) break;
+
+                const p = t.progress || {};
+                const done = p.done || 0;
+                const total = p.total || 0;
+                const found = p.found || 0;
+                const pct = total ? Math.round(done * 100 / total) : 0;
+
+                document.getElementById('progressBar').style.width = pct + '%';
+                document.getElementById('progressText').textContent = `${done}/${total} — VULN: ${found}`;
+                document.getElementById('progressPct').textContent = pct + '%';
+
+                if (p.log && p.log.length) {
+                    logBox.textContent = p.log.join('\n');
+                    logBox.scrollTop = logBox.scrollHeight;
+                }
+
+                if (t.status === 'done') {
+                    const res = t.result || {};
+                    showResult(`✅ Done! Tested: <strong>${res.tested}</strong>, 
+                                Vulnerable: <strong style="color: var(--error);">${res.vuln}</strong>`,
+                        res.file);
+                    return;
+                }
+                if (t.status === 'error') {
+                    showResult('❌ Error: ' + (t.error || 'unknown'));
+                    return;
+                }
+            }
+        }
+
+        function showResult(msg, file) {
+            const box = document.getElementById('resultBox');
+            box.classList.remove('hidden');
+            let html = `<h3>${msg}</h3>`;
+            if (file) {
+                html += `<a href="/download/${file}" class="btn btn-primary" style="margin-top: 1rem;">📥 Download File</a>`;
+            }
+            box.innerHTML = html;
+        }
+    </script>
+</body>
+</html>

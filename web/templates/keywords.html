@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keywords Generator — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <a href="/keywords" class="navbar-link">🥇 Keywords</a>
+                <a href="/dorks" class="navbar-link">🥈 Dorks</a>
+                <a href="/logout" class="navbar-link">🚪</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">🥇 Keywords Generator</h1>
+        <p class="card-sub">Enter seed brands/keywords (manual) — bot jaisa</p>
+
+        {% if last %}
+        <div class="alert alert-info" style="margin-top: 1rem;">
+            📋 Last run: <strong>{{ last.count }}</strong> keywords 
+            {% if last.file %} — <a href="/download/{{ last.file }}" style="color: var(--accent);">📥 Download</a>{% endif %}
+        </div>
+        {% endif %}
+
+        <!-- Count -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <label>🔢 How Many Keywords?</label>
+            <input type="number" id="count" value="1000" min="100" max="1000000">
+            <p class="card-sub" style="margin-top: 0.5rem;">
+                Default 1000, Max 1,000,000
+            </p>
+        </div>
+
+        <!-- Seeds -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <label>📤 Enter Seeds (Manual)</label>
+            <p class="card-sub" style="margin-bottom: 0.75rem;">
+                Comma-separated or one per line
+            </p>
+            <textarea id="seedsInput" placeholder="shop, payment, login, admin, cart, order
+
+OR line by line:
+shop
+payment
+login
+admin
+cart"></textarea>
+            <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
+                <input type="file" id="fileInput" accept=".txt" onchange="loadFile(event)" style="display: none;">
+                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                    📁 Upload .txt
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('seedsInput').value=''">
+                    🗑 Clear
+                </button>
+                <button class="btn btn-secondary" onclick="loadDefault()">
+                    ✨ Load Default Seeds
+                </button>
+            </div>
+        </div>
+
+        <!-- Generate -->
+        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem; font-size: 1.1rem;" 
+                onclick="generateKeywords()" id="genBtn">
+            🚀 GENERATE KEYWORDS
+        </button>
+
+        <!-- Progress -->
+        <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
+            <h3 id="progressTitle">⏳ Generating...</h3>
+            <div class="progress-wrap">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div class="progress-info">
+                <span id="progressText">0/0</span>
+                <span id="progressPct">0%</span>
+            </div>
+            <div id="logBox" class="log-box" style="margin-top: 1rem;"></div>
+        </div>
+
+        <!-- Result -->
+        <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
+    </div>
+
+    <script>
+        function loadFile(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { document.getElementById('seedsInput').value = ev.target.result; };
+            r.readAsText(f);
+        }
+
+        function loadDefault() {
+            document.getElementById('seedsInput').value = 
+                'shop, payment, checkout, login, admin, cart, order, billing, account, credit';
+        }
+
+        async function generateKeywords() {
+            const seeds = document.getElementById('seedsInput').value.trim();
+            if (!seeds) { alert('Enter seeds first!'); return; }
+            const count = document.getElementById('count').value;
+
+            document.getElementById('genBtn').disabled = true;
+            document.getElementById('genBtn').textContent = '⏳ Working...';
+
+            const fd = new FormData();
+            fd.append('seeds', seeds);
+            fd.append('count', count);
+
+            try {
+                const r = await fetch('/api/keywords/generate', { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.error) { alert('❌ ' + d.error); reset(); return; }
+                pollTask(d.task_id);
+            } catch (e) {
+                alert('❌ Network error');
+                reset();
+            }
+        }
+
+        function reset() {
+            document.getElementById('genBtn').disabled = false;
+            document.getElementById('genBtn').textContent = '🚀 GENERATE KEYWORDS';
+        }
+
+        async function pollTask(tid) {
+            const pb = document.getElementById('progressBox');
+            pb.classList.remove('hidden');
+            const logBox = document.getElementById('logBox');
+
+            while (true) {
+                await new Promise(r => setTimeout(r, 1000));
+                const r = await fetch(`/api/task/${tid}`);
+                const t = await r.json();
+                if (!t) break;
+
+                const p = t.progress || {};
+                const done = p.done || 0, total = p.total || 0;
+                const pct = total ? Math.round(done * 100 / total) : 0;
+
+                document.getElementById('progressBar').style.width = pct + '%';
+                document.getElementById('progressText').textContent = `${done}/${total}`;
+                document.getElementById('progressPct').textContent = pct + '%';
+                if (p.msg) document.getElementById('progressTitle').textContent = '⏳ ' + p.msg;
+
+                if (t.status === 'done') {
+                    const res = t.result || {};
+                    const box = document.getElementById('resultBox');
+                    box.classList.remove('hidden');
+                    box.innerHTML = `
+                        <h3 style="color: var(--success);">✅ Success!</h3>
+                        <p style="margin-top: 0.5rem;">Generated: <strong>${res.count}</strong> keywords</p>
+                        <a href="/download/${res.file}" class="btn btn-primary" style="margin-top: 1rem;">📥 Download File</a>
+                        <a href="/dorks" class="btn btn-secondary" style="margin-top: 1rem; margin-left: 0.5rem;">🥈 Generate Dorks →</a>
+                    `;
+                    reset();
+                    return;
+                }
+                if (t.status === 'error') {
+                    alert('❌ Error: ' + (t.error || 'unknown'));
+                    reset();
+                    return;
+                }
+            }
+        }
+    </script>
+</body>
+</html>

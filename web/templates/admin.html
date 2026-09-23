@@ -1,1 +1,139 @@
-h
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY ADMIN</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <a href="/admin" class="navbar-link">🧛 Admin</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">🧛 Admin Panel</h1>
+        <p class="card-sub">Full system control</p>
+
+        <!-- Stats -->
+        <div class="grid grid-4" style="margin-top: 1.5rem;">
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
+                <div class="stat-value">{{ total_users }}</div>
+                <div class="stat-label">Total Users</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🟢</div>
+                <div class="stat-value">{{ active_users }}</div>
+                <div class="stat-label">Active Users</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🔑</div>
+                <div class="stat-value">{{ total_keys }}</div>
+                <div class="stat-label">License Keys</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">💎</div>
+                <div class="stat-value">{{ plans|length }}</div>
+                <div class="stat-label">Plans</div>
+            </div>
+        </div>
+
+        <!-- Menu -->
+        <h2 style="margin-top: 2rem;">🎯 Management</h2>
+        <div class="grid grid-3" style="margin-top: 1rem;">
+            <a href="/admin/keys" class="tile">
+                <div class="tile-icon">🔑</div>
+                <div class="tile-title">License Keys</div>
+                <div class="tile-sub">Generate / List / Revoke</div>
+            </a>
+            <a href="/admin/users" class="tile">
+                <div class="tile-icon">👥</div>
+                <div class="tile-title">Users</div>
+                <div class="tile-sub">Manage all users</div>
+            </a>
+            <a href="/admin/broadcast" class="tile">
+                <div class="tile-icon">📣</div>
+                <div class="tile-title">Broadcast</div>
+                <div class="tile-sub">Send message to all</div>
+            </a>
+            <a href="/admin/stats" class="tile">
+                <div class="tile-icon">📊</div>
+                <div class="tile-title">Server Stats</div>
+                <div class="tile-sub">RAM / CPU / Tasks</div>
+            </a>
+            <a href="/dashboard" class="tile">
+                <div class="tile-icon">🏠</div>
+                <div class="tile-title">User Dashboard</div>
+                <div class="tile-sub">Switch to user view</div>
+            </a>
+            <a href="/files" class="tile">
+                <div class="tile-icon">📁</div>
+                <div class="tile-title">All Files</div>
+                <div class="tile-sub">All outputs</div>
+            </a>
+        </div>
+
+        <!-- Quick Generate -->
+        <div class="card" style="margin-top: 2rem;">
+            <h3>⚡ Quick Actions</h3>
+            <div class="grid grid-2" style="margin-top: 1rem;">
+                <div>
+                    <label>Generate N Keys</label>
+                    <form method="POST" action="/admin/keys/generate" style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                        <select name="plan" style="flex: 1;">
+                            {% for code, plan in plans.items() %}
+                            <option value="{{ code }}">{{ plan.label }} — {{ plan.price }}</option>
+                            {% endfor %}
+                        </select>
+                        <input type="number" name="count" value="1" min="1" max="100" style="width: 80px;">
+                        <button type="submit" class="btn btn-primary">🔑 Generate</button>
+                    </form>
+                </div>
+                <div>
+                    <label>View All Keys</label>
+                    <a href="/admin/keys" class="btn btn-secondary btn-block" style="margin-top: 0.5rem;">
+                        📋 Manage Keys
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Plans Reference -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>💎 Available Plans</h3>
+            <table style="margin-top: 1rem;">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Label</th>
+                        <th>Duration</th>
+                        <th>Price</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for code, plan in plans.items() %}
+                    <tr>
+                        <td><code>{{ code }}</code></td>
+                        <td>{{ plan.label }}</td>
+                        <td>{{ plan.delta }}</td>
+                        <td style="color: var(--accent); font-weight: 700;">{{ plan.price }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

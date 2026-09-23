@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">👤 My Profile</h1>
+
+        <div class="grid grid-2" style="margin-top: 1.5rem;">
+            <div class="card">
+                <h3>ℹ️ User Info</h3>
+                <p><strong>Username:</strong> {{ uid }}</p>
+                <p><strong>Plan:</strong> {{ user.plan_label or 'Free' }}</p>
+                <p><strong>Admin:</strong> {{ 'Yes' if user.is_admin else 'No' }}</p>
+                <p><strong>Expires:</strong> {{ user.expires or 'Never' }}</p>
+                <p><strong>Created:</strong> {{ user.created[:19] if user.created else 'N/A' }}</p>
+            </div>
+
+            <div class="card">
+                <h3>📊 Usage Stats</h3>
+                {% set u = user.usage or {} %}
+                {% set l = user.limits or {} %}
+                <p>Keywords: <strong>{{ u.get('keywords', 0) }}</strong> / {{ l.get('keywords', 0) }}</p>
+                <p>Dorks: <strong>{{ u.get('dorks', 0) }}</strong> / {{ l.get('dorks', 0) }}</p>
+                <p>URLs: <strong>{{ u.get('urls', 0) }}</strong> / {{ l.get('urls', 0) }}</p>
+                <p>SQLi: <strong>{{ u.get('sqli', 0) }}</strong> / {{ l.get('sqli', 0) }}</p>
+                <p>Dumps: <strong>{{ u.get('dumps', 0) }}</strong> / {{ l.get('dumps', 0) }}</p>
+                <p>Cards: <strong>{{ u.get('cards', 0) }}</strong></p>
+                <p>Fullz: <strong>{{ u.get('fullz', 0) }}</strong></p>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>📋 Last Responses</h3>
+            {% if last %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Action</th>
+                        <th>Details</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for action, data in last.items() %}
+                    <tr>
+                        <td><strong>{{ action }}</strong></td>
+                        <td style="font-size: 0.8rem;">
+                            {% for k, v in data.items() %}
+                                {% if k != 'timestamp' %}
+                                    {{ k }}: {{ v }}<br>
+                                {% endif %}
+                            {% endfor %}
+                        </td>
+                        <td style="font-size: 0.75rem; color: var(--text-dim);">
+                            {{ data.timestamp[:19] if data.timestamp else 'N/A' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="card-sub">No activity yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

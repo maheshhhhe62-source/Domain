@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Home</a>
+                <a href="/keywords" class="navbar-link">🥇 Keywords</a>
+                <a href="/dorks" class="navbar-link">🥈 Dorks</a>
+                <a href="/parser" class="navbar-link">🛰️ Parser</a>
+                <a href="/proxy" class="navbar-link">🌊 Proxy</a>
+                <a href="/dump" class="navbar-link">🕳️ Dump</a>
+                <a href="/files" class="navbar-link">📁 Files</a>
+                <a href="/profile" class="navbar-link">👤 {{ uid }}</a>
+                {% if is_admin %}
+                <a href="/admin" class="navbar-link" style="color: var(--accent);">🧛 Admin</a>
+                {% endif %}
+                <a href="/logout" class="navbar-link">🚪</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% if msg %}
+        <div class="alert alert-info">ℹ️ {{ msg }}</div>
+        {% endif %}
+        {% if error %}
+        <div class="alert alert-error">❌ {{ error }}</div>
+        {% endif %}
+
+        <!-- Welcome -->
+        <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="flex justify-between items-center" style="flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <h1 class="text-glow">👋 Welcome, {{ uid }}</h1>
+                    <p class="card-sub">
+                        Plan: <strong style="color: var(--accent);">{{ plan_label }}</strong> |
+                        Expires: <strong style="color: var(--success);">{{ expiry_str }}</strong>
+                    </p>
+                </div>
+                <div>
+                    <a href="/plans" class="btn btn-primary">💎 Upgrade</a>
+                    {% if is_admin %}
+                    <a href="/admin" class="btn btn-secondary">🧛 Admin</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="grid grid-4">
+            <div class="stat-card">
+                <div class="stat-icon">🥇</div>
+                <div class="stat-value">{{ stats.keywords }}</div>
+                <div class="stat-label">Keywords</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🥈</div>
+                <div class="stat-value">{{ stats.dorks }}</div>
+                <div class="stat-label">Dorks</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🌐</div>
+                <div class="stat-value">{{ stats.urls }}</div>
+                <div class="stat-label">URLs Parsed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">💳</div>
+                <div class="stat-value">{{ stats.cards }}</div>
+                <div class="stat-label">Cards Found</div>
+            </div>
+        </div>
+
+        <!-- Second row stats -->
+        <div class="grid grid-4" style="margin-top: 1.5rem;">
+            <div class="stat-card">
+                <div class="stat-icon">🦠</div>
+                <div class="stat-value">{{ stats.sqli }}</div>
+                <div class="stat-label">SQLi Scanned</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🕳️</div>
+                <div class="stat-value">{{ stats.dumps }}</div>
+                <div class="stat-label">Dumps</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📋</div>
+                <div class="stat-value">{{ stats.fullz }}</div>
+                <div class="stat-label">Fullz</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🌊</div>
+                <div class="stat-value">{{ proxies_count }}</div>
+                <div class="stat-label">Proxies</div>
+            </div>
+        </div>
+
+        <!-- Menu -->
+        <h2 style="margin-top: 2.5rem;">🎯 Tools</h2>
+        <div class="grid grid-4" style="margin-top: 1rem;">
+            <a href="/keywords" class="tile">
+                <div class="tile-icon">🥇</div>
+                <div class="tile-title">Keywords</div>
+                <div class="tile-sub">Generate seeds</div>
+            </a>
+            <a href="/dorks" class="tile">
+                <div class="tile-icon">🥈</div>
+                <div class="tile-title">Dorks</div>
+                <div class="tile-sub">5 types</div>
+            </a>
+            <a href="/parser" class="tile">
+                <div class="tile-icon">🛰️</div>
+                <div class="tile-title">Parser</div>
+                <div class="tile-sub">Dorks → URLs</div>
+            </a>
+            <a href="/proxy" class="tile">
+                <div class="tile-icon">🌊</div>
+                <div class="tile-title">Proxy</div>
+                <div class="tile-sub">Add & Check</div>
+            </a>
+            <a href="/sqli" class="tile">
+                <div class="tile-icon">🦠</div>
+                <div class="tile-title">SQLi Scanner</div>
+                <div class="tile-sub">Find vulns</div>
+            </a>
+            <a href="/dump" class="tile">
+                <div class="tile-icon">🕳️</div>
+                <div class="tile-title">DB Dumper</div>
+                <div class="tile-sub">SQLMap → CC</div>
+            </a>
+            <a href="/files" class="tile">
+                <div class="tile-icon">📁</div>
+                <div class="tile-title">Files</div>
+                <div class="tile-sub">Downloads</div>
+            </a>
+            <a href="/help" class="tile">
+                <div class="tile-icon">🚸</div>
+                <div class="tile-title">Help</div>
+                <div class="tile-sub">Guide</div>
+            </a>
+        </div>
+
+        <!-- Last Responses -->
+        {% if last %}
+        <h2 style="margin-top: 2.5rem;">📋 Recent Activity</h2>
+        <div class="card" style="margin-top: 1rem;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Action</th>
+                        <th>Details</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for action, data in last.items() %}
+                    <tr>
+                        <td><strong>{{ action }}</strong></td>
+                        <td style="font-size: 0.8rem;">
+                            {% for k, v in data.items() %}
+                                {% if k != 'timestamp' %}
+                                    {{ k }}: {{ v }}{% if not loop.last %} | {% endif %}
+                                {% endif %}
+                            {% endfor %}
+                        </td>
+                        <td style="font-size: 0.75rem; color: var(--text-dim);">
+                            {{ data.timestamp[:19] if data.timestamp else '' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- Footer -->
+        <div class="text-center" style="margin-top: 2rem; padding: 1rem; color: var(--text-dim); font-size: 0.75rem;">
+            🕷️ Spidey Web Dumper v2.0 — Premium Edition
+        </div>
+    </div>
+</body>
+</html>

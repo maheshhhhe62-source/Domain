@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Stats</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta http-equiv="refresh" content="15">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/admin" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY ADMIN</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/admin" class="navbar-link">🧛 Admin</a>
+                <a href="/admin/users" class="navbar-link">👥 Users</a>
+                <a href="/admin/keys" class="navbar-link">🔑 Keys</a>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">📊 Server Stats</h1>
+        <p class="card-sub">Auto-refresh every 15 seconds</p>
+
+        <!-- Main Stats -->
+        <div class="grid grid-4" style="margin-top: 1.5rem;">
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
+                <div class="stat-value">{{ stats.total_users }}</div>
+                <div class="stat-label">Total Users</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🟢</div>
+                <div class="stat-value">{{ stats.active_users }}</div>
+                <div class="stat-label">Active</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🔑</div>
+                <div class="stat-value">{{ stats.total_keys }}</div>
+                <div class="stat-label">Total Keys</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">✅</div>
+                <div class="stat-value">{{ stats.free_keys }}</div>
+                <div class="stat-label">Free Keys</div>
+            </div>
+        </div>
+
+        <!-- Server Stats -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>🖥️ Server Resources</h3>
+            <div class="grid grid-3" style="margin-top: 1rem;">
+                <div>
+                    <p class="card-sub">RAM</p>
+                    <p style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">{{ stats.mem }}</p>
+                </div>
+                <div>
+                    <p class="card-sub">CPU</p>
+                    <p style="font-size: 1.5rem; font-weight: 700; color: var(--success);">{{ stats.cpu }}</p>
+                </div>
+                <div>
+                    <p class="card-sub">Active Tasks</p>
+                    <p style="font-size: 1.5rem; font-weight: 700; color: var(--warning);">{{ stats.active_tasks }}</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Key Stats -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>🔑 Key Stats</h3>
+            <div class="grid grid-2" style="margin-top: 1rem;">
+                <div>
+                    <p>Used Keys: <strong style="color: var(--warning);">{{ stats.used_keys }}</strong></p>
+                    <p>Free Keys: <strong style="color: var(--success);">{{ stats.free_keys }}</strong></p>
+                </div>
+                <div>
+                    <p>Total Keys: <strong>{{ stats.total_keys }}</strong></p>
+                    <p>Activation Rate: 
+                        <strong>
+                            {% if stats.total_keys > 0 %}
+                            {{ ((stats.used_keys / stats.total_keys) * 100) | round(1) }}%
+                            {% else %}
+                            0%
+                            {% endif %}
+                        </strong>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Info -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>💻 System Info</h3>
+            <p><strong>Python:</strong> {{ stats.python }}</p>
+            <p><strong>OS:</strong> {{ stats.os }}</p>
+            <p><strong>Time:</strong> <span id="currentTime"></span></p>
+        </div>
+    </div>
+
+    <script>
+        setInterval(() => {
+            document.getElementById('currentTime').textContent = new Date().toLocaleString();
+        }, 1000);
+        document.getElementById('currentTime').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html>

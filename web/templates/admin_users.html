@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Users</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/admin" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY ADMIN</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/admin" class="navbar-link">🧛 Admin</a>
+                <a href="/admin/users" class="navbar-link">👥 Users</a>
+                <a href="/admin/keys" class="navbar-link">🔑 Keys</a>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">👥 User Management</h1>
+
+        {% if msg %}
+        <div class="alert alert-info">{{ msg }}</div>
+        {% endif %}
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>Total Users: {{ users|length }}</h3>
+
+            {% if users %}
+            <div style="margin-top: 1rem;">
+                {% for username, u in users %}
+                <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; margin-bottom: 1rem;">
+                    <div class="flex justify-between items-center" style="flex-wrap: wrap; gap: 1rem;">
+                        <div>
+                            <h4>
+                                {% if u.is_admin %}⚜️{% else %}👤{% endif %}
+                                {{ username }}
+                            </h4>
+                            <p class="card-sub" style="margin-top: 0.25rem;">
+                                Plan: <strong>{{ u.plan_label or 'Free' }}</strong> |
+                                Expires: <strong>{{ u.expires[:19] if u.expires else 'Never' }}</strong> |
+                                Created: {{ u.created[:10] if u.created else 'N/A' }}
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <button class="btn btn-secondary btn-sm" onclick="toggleDetails('{{ username }}')">
+                                📊 Details
+                            </button>
+                            {% if username != 'admin' %}
+                            <form method="POST" action="/admin/users/delete" 
+                                  onsubmit="return confirm('Delete {{ username }}?');" style="display: inline;">
+                                <input type="hidden" name="username" value="{{ username }}">
+                                <button type="submit" class="btn btn-danger btn-sm">🗑 Delete</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div id="details_{{ username }}" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+                        <div class="grid grid-2">
+                            <div>
+                                <p><strong>Usage:</strong></p>
+                                <p style="font-size: 0.85rem;">Keywords: {{ u.usage.keywords or 0 }}</p>
+                                <p style="font-size: 0.85rem;">Dorks: {{ u.usage.dorks or 0 }}</p>
+                                <p style="font-size: 0.85rem;">URLs: {{ u.usage.urls or 0 }}</p>
+                                <p style="font-size: 0.85rem;">SQLi: {{ u.usage.sqli or 0 }}</p>
+                                <p style="font-size: 0.85rem;">Dumps: {{ u.usage.dumps or 0 }}</p>
+                                <p style="font-size: 0.85rem;">Cards: {{ u.usage.cards or 0 }}</p>
+                                <p style="font-size: 0.85rem;">Fullz: {{ u.usage.fullz or 0 }}</p>
+                            </div>
+                            <div>
+                                <p><strong>Actions:</strong></p>
+                                <form method="POST" action="/admin/users/extend" style="margin-top: 0.5rem;">
+                                    <input type="hidden" name="username" value="{{ username }}">
+                                    <select name="plan" style="width: 100%; margin-bottom: 0.5rem;">
+                                        {% for code, plan in plans.items() %}
+                                        <option value="{{ code }}">{{ plan.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button type="submit" class="btn btn-success btn-sm" style="width: 100%;">➕ Extend</button>
+                                </form>
+
+                                <form method="POST" action="/admin/users/reset_password" style="margin-top: 0.5rem;">
+                                    <input type="hidden" name="username" value="{{ username }}">
+                                    <input type="text" name="new_password" placeholder="New password" 
+                                           style="width: 100%; margin-bottom: 0.5rem;">
+                                    <button type="submit" class="btn btn-secondary btn-sm" style="width: 100%;">🔐 Reset Pass</button>
+                                </form>
+
+                                <form method="POST" action="/admin/users/clear_usage" style="margin-top: 0.5rem;"
+                                      onsubmit="return confirm('Clear usage for {{ username }}?');">
+                                    <input type="hidden" name="username" value="{{ username }}">
+                                    <button type="submit" class="btn btn-warn btn-sm" style="width: 100%;">🧹 Clear Usage</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="card-sub text-center">No users yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        function toggleDetails(username) {
+            const el = document.getElementById('details_' + username);
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+    </script>
+</body>
+</html>

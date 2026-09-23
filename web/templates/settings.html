@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">⚙️ Settings</h1>
+        <p class="card-sub">Manage your account and defaults</p>
+
+        <div id="msgBox"></div>
+
+        <!-- Change Password -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>🔐 Change Password</h3>
+            <div class="form-group" style="margin-top: 1rem;">
+                <label>Old Password</label>
+                <input type="password" id="oldPass" placeholder="Enter current password">
+            </div>
+            <div class="form-group">
+                <label>New Password</label>
+                <input type="password" id="newPass" placeholder="Enter new password (min 4 chars)">
+            </div>
+            <button class="btn btn-primary" onclick="changePassword()">💾 Save Password</button>
+        </div>
+
+        <!-- SQLMap Defaults -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>⚙️ SQLMap Defaults</h3>
+            <p class="card-sub" style="margin-bottom: 1rem;">
+                These settings are used by default in the Dump page
+            </p>
+            <div class="grid grid-3">
+                <div>
+                    <label>Level (1-5)</label>
+                    <input type="number" id="setLevel" value="{{ sqlmap_defaults.level }}" min="1" max="5">
+                </div>
+                <div>
+                    <label>Risk (1-3)</label>
+                    <input type="number" id="setRisk" value="{{ sqlmap_defaults.risk }}" min="1" max="3">
+                </div>
+                <div>
+                    <label>Threads</label>
+                    <input type="number" id="setThreads" value="{{ sqlmap_defaults.threads }}" min="1" max="50">
+                </div>
+            </div>
+            <div style="margin-top: 1rem;">
+                <label>Technique</label>
+                <input type="text" id="setTechnique" value="{{ sqlmap_defaults.technique }}">
+            </div>
+            <div style="margin-top: 1rem;">
+                <label>Tamper Scripts</label>
+                <input type="text" id="setTamper" value="{{ sqlmap_defaults.tamper }}">
+            </div>
+            <div style="margin-top: 1rem;">
+                <label>Crawl Depth</label>
+                <input type="number" id="setCrawl" value="{{ sqlmap_defaults.crawl }}" min="0" max="5">
+            </div>
+            <button class="btn btn-primary" style="margin-top: 1rem;" onclick="saveDefaults()">
+                💾 Save Defaults
+            </button>
+        </div>
+
+        <!-- Account Info -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>ℹ️ Account Info</h3>
+            <p><strong>Username:</strong> {{ user.username }}</p>
+            <p><strong>Plan:</strong> {{ user.plan_label or 'Free' }}</p>
+            <p><strong>Expires:</strong> {{ user.expires or 'Never' }}</p>
+            <p><strong>Admin:</strong> {{ '✅ Yes' if user.is_admin else '❌ No' }}</p>
+        </div>
+    </div>
+
+    <script>
+        function showMsg(msg, type = 'success') {
+            const box = document.getElementById('msgBox');
+            box.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
+            setTimeout(() => box.innerHTML = '', 4000);
+        }
+
+        async function changePassword() {
+            const oldPass = document.getElementById('oldPass').value;
+            const newPass = document.getElementById('newPass').value;
+            if (!oldPass || !newPass) { showMsg('❌ Fill both fields', 'error'); return; }
+
+            const fd = new FormData();
+            fd.append('old_password', oldPass);
+            fd.append('new_password', newPass);
+            const r = await fetch('/api/settings/password', { method: 'POST', body: fd });
+            const d = await r.json();
+            if (d.error) { showMsg('❌ ' + d.error, 'error'); return; }
+            showMsg('✅ Password changed!');
+            document.getElementById('oldPass').value = '';
+            document.getElementById('newPass').value = '';
+        }
+
+        function saveDefaults() {
+            const defaults = {
+                level: document.getElementById('setLevel').value,
+                risk: document.getElementById('setRisk').value,
+                threads: document.getElementById('setThreads').value,
+                technique: document.getElementById('setTechnique').value,
+                tamper: document.getElementById('setTamper').value,
+                crawl: document.getElementById('setCrawl').value,
+            };
+            localStorage.setItem('sqlmap_defaults', JSON.stringify(defaults));
+            showMsg('✅ Defaults saved to browser!');
+        }
+    </script>
+</body>
+</html>

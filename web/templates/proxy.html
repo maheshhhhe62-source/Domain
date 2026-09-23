@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proxy Manager — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-glow">🌊 Proxy Manager</h1>
+        <p class="card-sub">Add proxies manually or upload file. Check live status.</p>
+
+        <div class="grid grid-2" style="margin-top: 1.5rem;">
+            <!-- Manual Add -->
+            <div class="card">
+                <h3>➕ Add Proxies (Manual)</h3>
+                <p class="card-sub" style="margin-bottom: 1rem;">
+                    One per line. Formats: <code>ip:port</code>, <code>ip:port:user:pass</code>,
+                    <code>socks5://ip:port</code>
+                </p>
+                <textarea id="manualInput" placeholder="1.2.3.4:8080
+5.6.7.8:3128:user:pass
+socks5://9.10.11.12:1080
+# comment lines are skipped"></textarea>
+                <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                    <button class="btn btn-primary" onclick="addManual()">➕ Add</button>
+                    <button class="btn btn-secondary" onclick="clearInput()">🗑 Clear Input</button>
+                </div>
+            </div>
+
+            <!-- File Upload -->
+            <div class="card">
+                <h3>📁 Import From File</h3>
+                <p class="card-sub" style="margin-bottom: 1rem;">
+                    Upload .txt or .zip file with proxies (one per line)
+                </p>
+                <input type="file" id="fileInput" accept=".txt,.zip" 
+                       style="background: var(--bg-secondary); padding: 0.75rem; border-radius: 10px; border: 1px solid var(--border); color: var(--text); width: 100%;">
+                <button class="btn btn-primary btn-block" style="margin-top: 1rem;" onclick="uploadFile()">
+                    📤 Upload & Import
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <div class="flex justify-between items-center" style="flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <h3>📊 Total Proxies: <span id="proxyCount" style="color: var(--accent);">{{ count }}</span></h3>
+                </div>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button class="btn btn-success" onclick="checkProxies()">✅ Check Live</button>
+                    <button class="btn btn-danger" onclick="clearAll()">🗑 Clear All</button>
+                    <button class="btn btn-secondary" onclick="loadList()">🔄 Refresh</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress -->
+        <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
+            <h3 id="progressTitle">⏳ Working...</h3>
+            <div class="progress-wrap">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div class="progress-info">
+                <span id="progressText">0/0</span>
+                <span id="progressPct">0%</span>
+            </div>
+            <div id="logBox" class="log-box" style="margin-top: 1rem;"></div>
+        </div>
+
+        <!-- Result -->
+        <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
+
+        <!-- Proxy List -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>📋 Proxy List</h3>
+            <div id="proxyList" style="max-height: 400px; overflow-y: auto; margin-top: 1rem;">
+                <p class="card-sub">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function addManual() {
+            const text = document.getElementById('manualInput').value.trim();
+            if (!text) { alert('Enter proxies first!'); return; }
+            const fd = new FormData();
+            fd.append('proxies', text);
+            const r = await fetch('/api/proxy/add', { method: 'POST', body: fd });
+            const d = await r.json();
+            if (d.error) { alert(d.error); return; }
+            showResult(`✅ Added ${d.added} (${d.duplicate} duplicates). Total: ${d.total}`);
+            document.getElementById('manualInput').value = '';
+            loadList();
+        }
+
+        async function uploadFile() {
+            const fi = document.getElementById('fileInput');
+            if (!fi.files.length) { alert('Select a file!'); return; }
+            const fd = new FormData();
+            fd.append('file', fi.files[0]);
+            showResult('⏳ Uploading...');
+            const r = await fetch('/api/proxy/import', { method: 'POST', body: fd });
+            const d = await r.json();
+            if (d.error) { showResult('❌ ' + d.error); return; }
+            showResult(`✅ Imported ${d.added}. Total: ${d.total}`);
+            fi.value = '';
+            loadList();
+        }
+
+        async function checkProxies() {
+            const r = await fetch('/api/proxy/check', { method: 'POST' });
+            const d = await r.json();
+            if (d.error) { alert(d.error); return; }
+            pollTask(d.task_id, 'Checking proxies');
+        }
+
+        async function clearAll() {
+            if (!confirm('Clear ALL proxies?')) return;
+            await fetch('/api/proxy/clear', { method: 'POST' });
+            showResult('✅ All proxies cleared');
+            loadList();
+        }
+
+        async function loadList() {
+            const r = await fetch('/api/proxy/list');
+            const d = await r.json();
+            document.getElementById('proxyCount').textContent = d.count;
+            const box = document.getElementById('proxyList');
+            if (!d.proxies || !d.proxies.length) {
+                box.innerHTML = '<p class="card-sub">No proxies saved yet.</p>';
+                return;
+            }
+            let html = '';
+            d.proxies.forEach((p, i) => {
+                html += `<div style="padding: 0.5rem; border-bottom: 1px solid var(--border); font-family: monospace; font-size: 0.85rem;">
+                    <span style="color: var(--text-dim);">${i+1}.</span> ${p}
+                </div>`;
+            });
+            box.innerHTML = html;
+        }
+
+        function clearInput() {
+            document.getElementById('manualInput').value = '';
+        }
+
+        function showResult(msg) {
+            const box = document.getElementById('resultBox');
+            box.classList.remove('hidden');
+            box.innerHTML = `<h3>${msg}</h3>`;
+        }
+
+        async function pollTask(tid, label) {
+            const pb = document.getElementById('progressBox');
+            pb.classList.remove('hidden');
+            document.getElementById('progressTitle').textContent = '⏳ ' + label;
+
+            while (true) {
+                await new Promise(r => setTimeout(r, 1200));
+                const r = await fetch(`/api/task/${tid}`);
+                const t = await r.json();
+                if (!t || t.error) break;
+
+                const p = t.progress || {};
+                const done = p.done || 0;
+                const total = p.total || 0;
+                const pct = total ? Math.round(done * 100 / total) : 0;
+                document.getElementById('progressBar').style.width = pct + '%';
+                document.getElementById('progressText').textContent = `${done}/${total} — ${p.msg || ''}`;
+                document.getElementById('progressPct').textContent = pct + '%';
+
+                if (t.status === 'done') {
+                    const res = t.result || {};
+                    showResult(`✅ Done! Live: ${res.live || 0} / ${res.checked || 0}`);
+                    loadList();
+                    return;
+                }
+                if (t.status === 'error') {
+                    showResult('❌ Error: ' + (t.error || 'unknown'));
+                    return;
+                }
+            }
+        }
+
+        loadList();
+    </script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Help — Spidey</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/dashboard" class="navbar-brand">
+                <span class="navbar-logo">🕷️</span>
+                <span class="navbar-title">SPIDEY</span>
+            </a>
+            <div class="navbar-links">
+                <a href="/dashboard" class="navbar-link">🏠 Dashboard</a>
+                <span class="navbar-user">👤 {{ uid }}</span>
+                <a href="/logout" class="navbar-link">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container" style="max-width: 900px;">
+        <h1 class="text-glow text-center">🚸 Help & Guide</h1>
+        <p class="card-sub text-center">How to use Spidey Web Dumper</p>
+
+        <!-- Pipeline -->
+        <div class="card" style="margin-top: 2rem;">
+            <h3>📕 Full Pipeline</h3>
+            <ol style="padding-left: 1.5rem; margin-top: 1rem; line-height: 2.5;">
+                <li>🥇 <strong>Keywords</strong> — Generate seed keywords</li>
+                <li>🥈 <strong>Dorks</strong> — Convert keywords to dorks</li>
+                <li>🌊 <strong>Proxy</strong> — Add and check proxies</li>
+                <li>🛰️ <strong>Parser</strong> — Dorks → URLs</li>
+                <li>🦠 <strong>SQLi Scanner</strong> — Test URLs for vulns</li>
+                <li>🕳️ <strong>Dumper</strong> — SQLMap → CC / Fullz</li>
+                <li>📁 <strong>Files</strong> — Download your data</li>
+            </ol>
+        </div>
+
+        <!-- Step by Step -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>📖 Step-by-Step Guide</h3>
+
+            <h4 style="margin-top: 1rem; color: var(--accent);">Step 1: Generate Keywords</h4>
+            <p style="margin-top: 0.5rem;">Go to <strong>Keywords</strong> page. Enter seeds like:</p>
+            <div class="log-box" style="margin-top: 0.5rem;">
+shop, payment, checkout, login, admin, cart
+            </div>
+            <p style="margin-top: 0.5rem;">Set count (e.g. 1000). Click Generate.</p>
+
+            <h4 style="margin-top: 1.5rem; color: var(--accent);">Step 2: Generate Dorks</h4>
+            <p style="margin-top: 0.5rem;">Go to <strong>Dorks</strong> page. Paste keywords. Choose type:</p>
+            <ul style="padding-left: 1.5rem; margin-top: 0.5rem;">
+                <li><strong>normal</strong> — Standard SQLi dorks</li>
+                <li><strong>hq</strong> — High-quality SQLi dorks</li>
+                <li><strong>country</strong> — Country-targeted</li>
+                <li><strong>cms</strong> — WordPress/Joomla/etc.</li>
+                <li><strong>exposed</strong> — .env / config files</li>
+            </ul>
+
+            <h4 style="margin-top: 1.5rem; color: var(--accent);">Step 3: Add Proxies</h4>
+            <p style="margin-top: 0.5rem;">Go to <strong>Proxy</strong> page. Paste proxies (one per line) or upload file. Click <strong>Check Live</strong> to filter dead ones.</p>
+
+            <h4 style="margin-top: 1.5rem; color: var(--accent);">Step 4: Parse Dorks → URLs</h4>
+            <p style="margin-top: 0.5rem;">Go to <strong>Parser</strong> page. Paste your dorks. Click Run. Wait for URLs.</p>
+
+            <h4 style="margin-top: 1.5rem; color: var(--accent);">Step 5: SQLi Scan</h4>
+            <p style="margin-top: 0.5rem;">Go to <strong>SQLi Scanner</strong>. Paste URLs from step 4. Click Start Scan. Vulnerable URLs will be listed.</p>
+
+            <h4 style="margin-top: 1.5rem; color: var(--accent);">Step 6: Dump</h4>
+            <p style="margin-top: 0.5rem;">Go to <strong>Dumper</strong>. Paste vulnerable URLs. Adjust SQLMap settings. Click Start Dump. Download CC + Fullz files.</p>
+        </div>
+
+        <!-- FAQ -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>❓ FAQ</h3>
+
+            <p style="margin-top: 1rem;"><strong>Q: My scan is slow. Why?</strong></p>
+            <p class="card-sub">A: Add more proxies. Without proxies, engines block your IP.</p>
+
+            <p style="margin-top: 1rem;"><strong>Q: No URLs found?</strong></p>
+            <p class="card-sub">A: Try different dorks (hq or exposed). Or add more proxies.</p>
+
+            <p style="margin-top: 1rem;"><strong>Q: Dump failed?</strong></p>
+            <p class="card-sub">A: Check if URL is actually vulnerable first (SQLi Scanner). Use higher level/risk.</p>
+
+            <p style="margin-top: 1rem;"><strong>Q: Quota exceeded?</strong></p>
+            <p class="card-sub">A: Upgrade your plan or redeem a new license key.</p>
+        </div>
+
+        <!-- Quick Links -->
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>⚡ Quick Actions</h3>
+            <div class="grid grid-3" style="margin-top: 1rem;">
+                <a href="/keywords" class="tile">
+                    <div class="tile-icon">🥇</div>
+                    <div class="tile-title">Keywords</div>
+                </a>
+                <a href="/dorks" class="tile">
+                    <div class="tile-icon">🥈</div>
+                    <div class="tile-title">Dorks</div>
+                </a>
+                <a href="/parser" class="tile">
+                    <div class="tile-icon">🛰️</div>
+                    <div class="tile-title">Parser</div>
+                </a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
