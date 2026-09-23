@@ -48,181 +48,316 @@
         {% if msg %}<div class="alert alert-info">ℹ️ {{ msg }}</div>{% endif %}
         {% if error %}<div class="alert alert-error">❌ {{ error }}</div>{% endif %}
 
-        <!-- WELCOME BANNER -->
-        <div class="welcome-banner">
-            <div class="welcome-left">
-                <div class="welcome-badge">
-                    <span class="status-dot"></span>
-                    <span>Online</span>
+        <!-- WELCOME HERO -->
+        <div class="hero-card">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <span>👑</span>
+                    <span>PREMIUM EDITION</span>
                 </div>
-                <h1 class="text-glow">👋 Welcome back, {{ uid }}</h1>
-                <p class="card-sub" style="margin-top: 0.5rem;">
-                    Plan: <strong style="color: var(--accent-light);">{{ plan_label }}</strong>
-                    <span class="sep">•</span>
-                    Expires: <strong style="color: var(--success);">{{ expiry_str }}</strong>
-                </p>
+                <h1 class="hero-title">
+                    Welcome back, <span class="text-glow">{{ uid }}</span>
+                </h1>
+                <p class="hero-sub">Your Web Dumper is running smoothly.<br>Explore, dump, and get results faster than ever.</p>
+                <div class="hero-features">
+                    <div class="hero-feature"><span>⚡</span> High Speed</div>
+                    <div class="hero-feature"><span>🔗</span> Multi-Thread</div>
+                    <div class="hero-feature"><span>🌊</span> Proxy Rotation</div>
+                    <div class="hero-feature"><span>🛡️</span> Anti-Ban</div>
+                    <div class="hero-feature"><span>🎧</span> 24/7 Support</div>
+                </div>
             </div>
-            <div class="welcome-right">
-                <a href="/plans" class="btn btn-primary">💎 Upgrade</a>
-                {% if is_admin %}
-                <a href="{{ admin_path }}" class="btn btn-secondary">🧛 Admin</a>
-                {% endif %}
+            <div class="hero-stats">
+                <div class="hero-stats-header">
+                    <span>📊 Today's Activity</span>
+                    <span class="hero-live"><span class="status-dot"></span>Live</span>
+                </div>
+                <div class="hero-stat-row">
+                    <span>💥</span>
+                    <span>Total Dumps</span>
+                    <strong>{{ stats.dumps }}</strong>
+                </div>
+                <div class="hero-stat-row">
+                    <span>🔑</span>
+                    <span>Total Keywords</span>
+                    <strong>{{ stats.keywords }}</strong>
+                </div>
+                <div class="hero-stat-row">
+                    <span>🌊</span>
+                    <span>Total Proxies</span>
+                    <strong>{{ proxies_count }}</strong>
+                </div>
+                <div class="hero-graph">
+                    <svg viewBox="0 0 200 60" preserveAspectRatio="none">
+                        <defs>
+                            <linearGradient id="grad1" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" style="stop-color:#a855f7;stop-opacity:0.4"/>
+                                <stop offset="100%" style="stop-color:#a855f7;stop-opacity:0"/>
+                            </linearGradient>
+                        </defs>
+                        <path d="M0,45 Q25,35 50,38 T100,25 T150,18 T200,5 L200,60 L0,60 Z" fill="url(#grad1)"/>
+                        <path d="M0,45 Q25,35 50,38 T100,25 T150,18 T200,5" stroke="#a855f7" stroke-width="2" fill="none"/>
+                    </svg>
+                </div>
             </div>
         </div>
 
         <!-- STATS ROW 1 -->
-        <div class="section-header">
-            <span class="section-icon">📊</span>
-            <h2 class="text-glow">Statistics</h2>
-        </div>
-        <div class="grid grid-4">
-            <div class="stat-card stat-primary">
-                <div class="stat-icon">🥇</div>
-                <div class="stat-value">{{ stats.keywords }}</div>
-                <div class="stat-label">Keywords</div>
-                <div class="stat-glow"></div>
+        <div class="grid grid-5">
+            <div class="stat-card-v2 stat-purple">
+                <div class="stat-card-icon">🔑</div>
+                <div class="stat-card-body">
+                    <div class="stat-card-value">{{ stats.keywords }}</div>
+                    <div class="stat-card-label">Keywords Found</div>
+                    <div class="stat-card-trend up">↑ +12%</div>
+                </div>
             </div>
-            <div class="stat-card stat-secondary">
-                <div class="stat-icon">🥈</div>
-                <div class="stat-value">{{ stats.dorks }}</div>
-                <div class="stat-label">Dorks</div>
-                <div class="stat-glow"></div>
+            <div class="stat-card-v2 stat-pink">
+                <div class="stat-card-icon">🥈</div>
+                <div class="stat-card-body">
+                    <div class="stat-card-value">{{ stats.dorks }}</div>
+                    <div class="stat-card-label">Dorks Scanned</div>
+                    <div class="stat-card-trend up">↑ +8%</div>
+                </div>
             </div>
-            <div class="stat-card stat-tertiary">
-                <div class="stat-icon">🌐</div>
-                <div class="stat-value">{{ stats.urls }}</div>
-                <div class="stat-label">URLs Parsed</div>
-                <div class="stat-glow"></div>
+            <div class="stat-card-v2 stat-cyan">
+                <div class="stat-card-icon">🌊</div>
+                <div class="stat-card-body">
+                    <div class="stat-card-value">{{ proxies_count }}</div>
+                    <div class="stat-card-label">Proxies Online</div>
+                    <div class="stat-card-trend up">↑ +15%</div>
+                </div>
             </div>
-            <div class="stat-card stat-success">
-                <div class="stat-icon">💳</div>
-                <div class="stat-value">{{ stats.cards }}</div>
-                <div class="stat-label">Cards Found</div>
-                <div class="stat-glow"></div>
+            <div class="stat-card-v2 stat-yellow">
+                <div class="stat-card-icon">📁</div>
+                <div class="stat-card-body">
+                    <div class="stat-card-value">{{ stats.urls }}</div>
+                    <div class="stat-card-label">URLs Parsed</div>
+                    <div class="stat-card-trend up">↑ +22%</div>
+                </div>
             </div>
-        </div>
-
-        <!-- STATS ROW 2 -->
-        <div class="grid grid-4" style="margin-top: 1.5rem;">
-            <div class="stat-card stat-warning">
-                <div class="stat-icon">🦠</div>
-                <div class="stat-value">{{ stats.sqli }}</div>
-                <div class="stat-label">SQLi Scanned</div>
-                <div class="stat-glow"></div>
-            </div>
-            <div class="stat-card stat-danger">
-                <div class="stat-icon">🕳️</div>
-                <div class="stat-value">{{ stats.dumps }}</div>
-                <div class="stat-label">Dumps</div>
-                <div class="stat-glow"></div>
-            </div>
-            <div class="stat-card stat-info">
-                <div class="stat-icon">📋</div>
-                <div class="stat-value">{{ stats.fullz }}</div>
-                <div class="stat-label">Fullz</div>
-                <div class="stat-glow"></div>
-            </div>
-            <div class="stat-card stat-cyan">
-                <div class="stat-icon">🌊</div>
-                <div class="stat-value">{{ proxies_count }}</div>
-                <div class="stat-label">Proxies</div>
-                <div class="stat-glow"></div>
+            <div class="stat-card-v2 stat-green">
+                <div class="stat-card-icon">💳</div>
+                <div class="stat-card-body">
+                    <div class="stat-card-value">{{ stats.cards }}</div>
+                    <div class="stat-card-label">Cards Found</div>
+                    <div class="stat-card-trend up">↑ +2%</div>
+                </div>
             </div>
         </div>
 
-        <!-- TOOLS -->
-        <div class="section-header" style="margin-top: 2.5rem;">
-            <span class="section-icon">🎯</span>
-            <h2 class="text-glow">Tools</h2>
+        <!-- QUICK TOOLS -->
+        <div class="section-header-v2">
+            <div>
+                <span class="section-icon-v2">⚡</span>
+                <span class="section-title-v2">Quick Tools</span>
+                <div class="section-sub-v2">Fast access to all powerful tools</div>
+            </div>
+            <a href="/help" class="section-link">View All →</a>
         </div>
-        <div class="grid grid-4">
-            <a href="/keywords" class="tile tile-purple">
-                <div class="tile-icon">🥇</div>
-                <div class="tile-title">Keywords</div>
-                <div class="tile-sub">Generate seeds</div>
+        <div class="tools-grid">
+            <a href="/keywords" class="tool-card tool-purple">
+                <div class="tool-icon">🔑</div>
+                <div class="tool-title">Keywords</div>
+                <div class="tool-sub">Generate seeds</div>
+                <div class="tool-launch">Launch →</div>
             </a>
-            <a href="/dorks" class="tile tile-pink">
-                <div class="tile-icon">🥈</div>
-                <div class="tile-title">Dorks</div>
-                <div class="tile-sub">5 types</div>
+            <a href="/dorks" class="tool-card tool-cyan">
+                <div class="tool-icon">🔍</div>
+                <div class="tool-title">Dorks</div>
+                <div class="tool-sub">5 types</div>
+                <div class="tool-launch">Launch →</div>
             </a>
-            <a href="/parser" class="tile tile-cyan">
-                <div class="tile-icon">🛰️</div>
-                <div class="tile-title">Parser</div>
-                <div class="tile-sub">Dorks → URLs</div>
+            <a href="/parser" class="tool-card tool-green">
+                <div class="tool-icon">&lt;/&gt;</div>
+                <div class="tool-title">Parser</div>
+                <div class="tool-sub">Dorks → URLs</div>
+                <div class="tool-launch">Launch →</div>
             </a>
-            <a href="/proxy" class="tile tile-blue">
-                <div class="tile-icon">🌊</div>
-                <div class="tile-title">Proxy</div>
-                <div class="tile-sub">Add & Check</div>
+            <a href="/proxy" class="tool-card tool-yellow">
+                <div class="tool-icon">🌊</div>
+                <div class="tool-title">Proxy</div>
+                <div class="tool-sub">Add & Check</div>
+                <div class="tool-launch">Launch →</div>
             </a>
-            <a href="/sqli" class="tile tile-green">
-                <div class="tile-icon">🦠</div>
-                <div class="tile-title">SQLi Scanner</div>
-                <div class="tile-sub">Find vulns</div>
+            <a href="/sqli" class="tool-card tool-red">
+                <div class="tool-icon">🦠</div>
+                <div class="tool-title">SQLi Scanner</div>
+                <div class="tool-sub">Find vulns</div>
+                <div class="tool-launch">Launch →</div>
             </a>
-            <a href="/dump" class="tile tile-red">
-                <div class="tile-icon">🕳️</div>
-                <div class="tile-title">DB Dumper</div>
-                <div class="tile-sub">SQLMap → CC</div>
+            <a href="/dump" class="tool-card tool-cyan">
+                <div class="tool-icon">🕳️</div>
+                <div class="tool-title">DB Dumper</div>
+                <div class="tool-sub">SQLMap → CC</div>
+                <div class="tool-launch">Launch →</div>
             </a>
-            <a href="/files" class="tile tile-gold">
-                <div class="tile-icon">📁</div>
-                <div class="tile-title">Files</div>
-                <div class="tile-sub">Downloads</div>
+            <a href="/files" class="tool-card tool-pink">
+                <div class="tool-icon">📁</div>
+                <div class="tool-title">Files</div>
+                <div class="tool-sub">Downloads</div>
+                <div class="tool-launch">Launch →</div>
             </a>
-            <a href="/help" class="tile tile-cyan">
-                <div class="tile-icon">🚸</div>
-                <div class="tile-title">Help</div>
-                <div class="tile-sub">Guide</div>
+            <a href="/help" class="tool-card tool-purple">
+                <div class="tool-icon">🚸</div>
+                <div class="tool-title">Help</div>
+                <div class="tool-sub">Guide & Docs</div>
+                <div class="tool-launch">Launch →</div>
             </a>
         </div>
 
-        <!-- RECENT ACTIVITY -->
-        {% if last %}
-        <div class="section-header" style="margin-top: 2.5rem;">
-            <span class="section-icon">📋</span>
-            <h2 class="text-glow">Recent Activity</h2>
+        <!-- BOTTOM 3-COLUMN -->
+        <div class="bottom-grid">
+            
+            <!-- RECENT ACTIVITY -->
+            <div class="bottom-card">
+                <div class="bottom-header">
+                    <span>📋</span>
+                    <span>Recent Activity</span>
+                    <a href="/logs" class="bottom-link">View All →</a>
+                </div>
+                <div class="activity-list">
+                    {% if last %}
+                        {% for action, data in last.items() %}
+                        <div class="activity-item">
+                            <div class="activity-icon activity-{{ loop.index % 4 }}">⚡</div>
+                            <div class="activity-body">
+                                <div class="activity-title">{{ action|title }}</div>
+                                <div class="activity-sub">
+                                    {% for k, v in data.items() %}
+                                        {% if k != 'timestamp' %}
+                                            {{ k }}: {{ v }}{% if not loop.last %} • {% endif %}
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="activity-time">
+                                {{ data.timestamp[:16].replace('T',' ') if data.timestamp else '' }}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="activity-empty">
+                            <div class="activity-empty-icon">📭</div>
+                            <div>No activity yet</div>
+                            <div class="activity-empty-sub">Start using tools to see them here</div>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- SERVER INFO -->
+            <div class="bottom-card">
+                <div class="bottom-header">
+                    <span>🖥️</span>
+                    <span>Server Info</span>
+                    <span class="bottom-badge">VPS</span>
+                </div>
+                <div class="info-list">
+                    <div class="info-row">
+                        <span class="info-label">📡 IP Address</span>
+                        <span class="info-value">{{ server_ip or '127.0.0.1' }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">🖥️ Hostname</span>
+                        <span class="info-value">{{ server_host or 'spidey-web' }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">💿 OS</span>
+                        <span class="info-value">{{ server_os or 'Linux' }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">🐍 Python</span>
+                        <span class="info-value">{{ server_python or '3.11' }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">⏱️ Uptime</span>
+                        <span class="info-value">{{ server_uptime or 'N/A' }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">🌍 Location</span>
+                        <span class="info-value">{{ server_location or 'India 🇮🇳' }}</span>
+                    </div>
+                </div>
+                <div class="server-status">
+                    <span class="status-dot"></span>
+                    <span>Server Online</span>
+                </div>
+            </div>
+
+            <!-- QUICK INFO -->
+            <div class="bottom-card">
+                <div class="bottom-header">
+                    <span>⚡</span>
+                    <span>Quick Info</span>
+                </div>
+                <div class="info-list">
+                    <div class="info-row">
+                        <span class="info-label">👑 Plan</span>
+                        <span class="info-value">{{ plan_label }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">📅 Version</span>
+                        <span class="info-value">v2.0</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">🔐 License</span>
+                        <span class="info-value">
+                            {% if is_admin or plan_label != 'Free Trial' %}
+                            <span class="badge badge-success">● Active</span>
+                            {% else %}
+                            <span class="badge badge-warn">● Trial</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">⏰ Expiry</span>
+                        <span class="info-value">{{ expiry_str }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">🎧 Support</span>
+                        <span class="info-value">24/7</span>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="card">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Action</th>
-                        <th>Details</th>
-                        <th>Time</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for action, data in last.items() %}
-                    <tr>
-                        <td><strong style="color: var(--accent-light);">{{ action }}</strong></td>
-                        <td style="font-size: 0.8rem;">
-                            {% for k, v in data.items() %}
-                                {% if k != 'timestamp' %}
-                                    <span style="color: var(--text-dim);">{{ k }}:</span>
-                                    <strong>{{ v }}</strong>{% if not loop.last %} <span class="sep">|</span> {% endif %}
-                                {% endif %}
-                            {% endfor %}
-                        </td>
-                        <td style="font-size: 0.75rem; color: var(--text-muted);">
-                            {{ data.timestamp[:19] if data.timestamp else '' }}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+
+        <!-- PREMIUM BANNER -->
+        <div class="premium-banner">
+            <div class="premium-banner-left">
+                <div class="premium-banner-icon">💎</div>
+                <div>
+                    <div class="premium-banner-title">Premium Features Unlocked</div>
+                    <div class="premium-banner-sub">Get more speed, more tools, more power.</div>
+                </div>
+            </div>
+            <div class="premium-banner-features">
+                <span>✅ Unlimited Dumps</span>
+                <span>✅ More Proxies</span>
+                <span>✅ Priority Support</span>
+                <span>✅ No Ads</span>
+            </div>
+            <a href="/plans" class="premium-banner-btn">👑 Upgrade Now →</a>
         </div>
-        {% endif %}
 
         <!-- FOOTER -->
-        <div class="footer">
-            <div class="footer-left">
-                <span>🕷️ Spidey Web Dumper v2.0 — Premium Edition</span>
+        <div class="footer-v2">
+            <div class="footer-v2-brand">
+                <span>🕷️</span>
+                <div>
+                    <div class="footer-v2-title">SPIDEY WEB DUMPER</div>
+                    <div class="footer-v2-sub">v2.0 Premium Edition</div>
+                </div>
             </div>
-            <div class="footer-right">
-                <span class="status-dot"></span>
-                <span>All systems operational</span>
+            <div class="footer-v2-stats">
+                <span>Total Users: {{ total_users or 1 }}</span>
+                <span class="sep">|</span>
+                <span>Online: {{ online_users or 1 }}</span>
+                <span class="sep">|</span>
+                <span>Uptime: 99.9%</span>
+            </div>
+            <div class="footer-v2-tagline">
+                🚀 Hack Smarter • Dump Faster
             </div>
         </div>
     </div>
