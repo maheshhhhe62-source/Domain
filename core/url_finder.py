@@ -1,7 +1,7 @@
 """
-Spidey Core — URL Finder
-100% same as Telegram bot
-Dorks → URLs (via 8 engines + DDGS)
+Spidey Core — URL Finder (FINAL v4.0)
+Dorks → URLs via 8 engines + DDGS
+FIXED: thread-safe connector, 64 thread pool, fast DDGS retry
 """
 import asyncio
 import aiohttp
@@ -17,30 +17,32 @@ from bs4 import BeautifulSoup
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  THREAD POOL — 100% same
+#  THREAD POOL — 64 workers
 # ═══════════════════════════════════════════════════════════════════════════
-_THREAD_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=32)
+_THREAD_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=64)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  GLOBAL CONNECTOR — 100% same
+#  GLOBAL CONNECTOR — thread-safe
 # ═══════════════════════════════════════════════════════════════════════════
 _GLOBAL_CONNECTOR = None
+_CONNECTOR_LOCK = asyncio.Lock()
 
 
-def _get_connector():
+async def _get_connector():
     global _GLOBAL_CONNECTOR
-    if _GLOBAL_CONNECTOR is None or _GLOBAL_CONNECTOR.closed:
-        _GLOBAL_CONNECTOR = aiohttp.TCPConnector(
-            limit=300, limit_per_host=15,
-            ttl_dns_cache=300, force_close=False,
-            enable_cleanup_closed=True
-        )
-    return _GLOBAL_CONNECTOR
+    async with _CONNECTOR_LOCK:
+        if _GLOBAL_CONNECTOR is None or _GLOBAL_CONNECTOR.closed:
+            _GLOBAL_CONNECTOR = aiohttp.TCPConnector(
+                limit=300, limit_per_host=15,
+                ttl_dns_cache=300, force_close=False,
+                enable_cleanup_closed=True
+            )
+        return _GLOBAL_CONNECTOR
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  DDGS COOLDOWN — 100% same
+#  DDGS COOLDOWN
 # ═══════════════════════════════════════════════════════════════════════════
 _ddgs_lock = _threading.Lock()
 _ddgs_consecutive_empty = 0
@@ -71,7 +73,7 @@ def _ddgs_wait_if_coolingdown():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  HEADERS — 100% same
+#  HEADERS
 # ═══════════════════════════════════════════════════════════════════════════
 HEADERS_LIST = [
     {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -98,7 +100,7 @@ HEADERS_LIST = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BLACKLIST — 100% same
+#  BLACKLIST
 # ═══════════════════════════════════════════════════════════════════════════
 BLACKLIST_DOMAINS = {
     "google.com","google.co.uk","google.co.in","googleapis.com","googleusercontent.com",
@@ -158,7 +160,7 @@ HIGH_VALUE = re.compile(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  DORK CLEANER — 100% same
+#  DORK CLEANER
 # ═══════════════════════════════════════════════════════════════════════════
 def clean_dork_for_search(dork: str) -> str:
     d = dork.replace("\\", " ")
@@ -174,7 +176,7 @@ def clean_dork_for_search(dork: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  URL NORMALIZATION — 100% same
+#  URL NORMALIZATION
 # ═══════════════════════════════════════════════════════════════════════════
 _STRIP_PARAMS = frozenset([
     "utm_source","utm_medium","utm_campaign","utm_content","utm_term","utm_id",
@@ -265,15 +267,12 @@ def url_quality_score(url: str) -> int:
     return score
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  PROXY PICKER — 100% same
-# ═══════════════════════════════════════════════════════════════════════════
 def _pick_proxy(pool):
     return random.choice(pool) if pool else ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  CAPTCHA DETECTION — 100% same
+#  CAPTCHA DETECTION
 # ═══════════════════════════════════════════════════════════════════════════
 _CAPTCHA_PHRASES = (
     "captcha", "unusual traffic", "access denied", "robot check",
@@ -289,7 +288,7 @@ def _is_captcha_page(html: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  DDGS SEARCH — 100% same
+#  DDGS SEARCH
 # ═══════════════════════════════════════════════════════════════════════════
 try:
     from ddgs import DDGS
@@ -311,7 +310,7 @@ def _ddgs_search_sync(dork: str, max_results: int, proxy_list=None):
     if not cleaned:
         return []
     _ddgs_wait_if_coolingdown()
-    for attempt in range(3):
+    for attempt in range(2):  # ✅ 3 → 2 attempts
         proxy_url = _pick_proxy(proxy_list)
         try:
             if proxy_url:
@@ -334,16 +333,16 @@ def _ddgs_search_sync(dork: str, max_results: int, proxy_list=None):
                 _ddgs_record_success()
                 return urls
             _ddgs_record_empty()
-            time.sleep(0.5 * (attempt + 1))
+            time.sleep(0.3 * (attempt + 1))  # ✅ 0.5 → 0.3
             _ddgs_wait_if_coolingdown()
         except Exception as ex:
             msg = str(ex).lower()
             if any(k in msg for k in ("ratelimit", "202", "timeout")):
                 _ddgs_record_empty()
-                time.sleep(1.5 * (attempt + 1))
+                time.sleep(0.8 * (attempt + 1))  # ✅ 1.5 → 0.8
                 _ddgs_wait_if_coolingdown()
-            elif attempt < 2:
-                time.sleep(0.3)
+            elif attempt < 1:  # ✅ 2 → 1
+                time.sleep(0.2)  # ✅ 0.3 → 0.2
     _ddgs_record_empty()
     return []
 
@@ -386,7 +385,7 @@ async def search_ddgs_batch(dorks, max_results=12, proxy_list=None, num_variants
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BING REDIRECT DECODE — 100% same
+#  BING REDIRECT DECODE
 # ═══════════════════════════════════════════════════════════════════════════
 def decode_bing_redirect(href: str) -> str:
     try:
@@ -430,7 +429,7 @@ def _fix_href(href, skip_domain=""):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  EXTRACTORS — 100% same
+#  EXTRACTORS
 # ═══════════════════════════════════════════════════════════════════════════
 def extract_bing_urls(html: str) -> list:
     urls = []
@@ -561,7 +560,7 @@ def extract_mojeek_urls(html: str) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SCRAPE ENGINES — 100% same
+#  SCRAPE ENGINES
 # ═══════════════════════════════════════════════════════════════════════════
 SCRAPE_ENGINES = [
     {"name": "bing",
@@ -610,7 +609,7 @@ _ENGINE_POOL = [e for e in SCRAPE_ENGINES for _ in range(e.get("weight", 1))]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  FETCH SCRAPE — 100% same
+#  FETCH SCRAPE
 # ═══════════════════════════════════════════════════════════════════════════
 async def fetch_scrape(session, engine, dork, offset, semaphore, proxy_list=None):
     if proxy_list is None:
@@ -668,7 +667,7 @@ async def fetch_scrape(session, engine, dork, offset, semaphore, proxy_list=None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  MAIN FUNCTION — 100% same as bot
+#  MAIN FUNCTION
 # ═══════════════════════════════════════════════════════════════════════════
 async def search_urls_from_dorks(dorks, limit=200000, progress_callback=None,
                                   stop_event=None, proxy_list=None):
@@ -715,7 +714,7 @@ async def search_urls_from_dorks(dorks, limit=200000, progress_callback=None,
             except Exception:
                 pass
 
-    connector = _get_connector()
+    connector = await _get_connector()   # ✅ FIX: await
     scrape_sem = asyncio.Semaphore(80)
     batch_gate = asyncio.Semaphore(15)
 
