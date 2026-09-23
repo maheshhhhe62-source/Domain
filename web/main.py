@@ -1,7 +1,7 @@
 """
-Spidey Web Dumper — FastAPI Backend
+Aloneeop Web Dumper — FastAPI Backend
 Full UI with 20+ pages, multi-user, live progress, proxy rotation
-BOT JAISA KAAM KAREGA — Saare futures included
++ 10 Levels of Security
 """
 import os
 import io
@@ -15,6 +15,8 @@ import logging
 import tempfile
 import shutil
 import zipfile
+import hashlib
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -38,7 +40,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger("spidey_web")
+logger = logging.getLogger("Aloneeop_web")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -59,38 +61,65 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 # ═══════════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
-SECRET_KEY        = os.environ.get("SECRET_KEY", "spidey-web-secret-change-this")
+SECRET_KEY        = os.environ.get("SECRET_KEY", "Aloneeop-web-secret-change-this-123")
 ADMIN_USERNAME    = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "spidey123")
+ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "AloneeopPass123!")
 SESSION_MAX_AGE   = 86400 * 7
 DEFAULT_TRIAL_HRS = int(os.environ.get("TRIAL_HOURS", "24"))
 
 USERS_FILE        = os.path.join(DATA_DIR, "web_users.json")
 KEYS_FILE         = os.path.join(DATA_DIR, "web_keys.json")
 LAST_RESP_FILE    = os.path.join(DATA_DIR, "last_responses.json")
+FAILED_LOG_FILE   = os.path.join(DATA_DIR, "failed_logins.json")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  🛡️ SECURITY CONFIG — 10 LEVELS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Level 2: IP Whitelist
+ALLOWED_IPS_ENV = os.environ.get("ALLOWED_IPS", "").strip()
+ALLOWED_IPS = [ip.strip() for ip in ALLOWED_IPS_ENV.split(",") if ip.strip()]
+
+# Level 3: Rate Limit
+LOGIN_ATTEMPTS = defaultdict(list)
+RATE_MAX = 5
+RATE_WINDOW = 60
+
+# Level 4: Lockout
+FAILED_LOGINS = defaultdict(int)
+LOCKOUT_DURATION = 900
+LOCKED_IPS = {}
+
+# Level 8: Admin path
+ADMIN_PATH = os.environ.get("ADMIN_PATH", "/admin").strip()
+if not ADMIN_PATH.startswith("/"):
+    ADMIN_PATH = "/" + ADMIN_PATH
+
+# Level 10: Session idle timeout
+SESSION_IDLE_TIMEOUT = 3600
+
+# Sessions registry
+SESSIONS = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  APP INIT
 # ═══════════════════════════════════════════════════════════════════════════
-app = FastAPI(title="Spidey Web Dumper", docs_url=None, redoc_url=None)
+app = FastAPI(title="Aloneeop Web Dumper", docs_url=None, redoc_url=None)
 
-# Simple Jinja2 — no env objects (prevents dict error)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-templates.env.auto_reload = True
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TEMPLATE RENDER — backward-compatible + modern API
+#  TEMPLATE RENDER HELPER
 # ═══════════════════════════════════════════════════════════════════════════
 def render(name: str, ctx: dict):
-    """Unified render helper — works across Starlette versions."""
-    # Ensure request is in context
     if "request" not in ctx:
-        raise ValueError(f"render() called without request in context for {name}")
+        raise ValueError(f"render() called without request for {name}")
     return templates.TemplateResponse(
         request=ctx["request"],
         name=name,
@@ -115,6 +144,93 @@ def _save_json(path: str, data):
             json.dump(data, f, indent=2, default=str)
     except Exception as e:
         logger.error(f"save_json {path}: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  🛡️ SECURITY HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+def get_client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    real = request.headers.get("x-real-ip", "")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else "unknown"
+
+
+def check_ip_whitelist(ip: str) -> bool:
+    if not ALLOWED_IPS:
+        return True
+    return ip in ALLOWED_IPS
+
+
+def check_rate_limit(ip: str, max_attempts: int = RATE_MAX, window: int = RATE_WINDOW) -> bool:
+    now = time.time()
+    attempts = LOGIN_ATTEMPTS[ip]
+    attempts[:] = [t for t in attempts if now - t < window]
+    if len(attempts) >= max_attempts:
+        return False
+    attempts.append(now)
+    return True
+
+
+def check_lockout(ip: str):
+    if ip in LOCKED_IPS:
+        unlock_time = LOCKED_IPS[ip]
+        now = time.time()
+        if now < unlock_time:
+            return False, int(unlock_time - now)
+        else:
+            del LOCKED_IPS[ip]
+            FAILED_LOGINS[ip] = 0
+    return True, 0
+
+
+def record_failed_login(ip: str, username: str):
+    FAILED_LOGINS[ip] += 1
+    if FAILED_LOGINS[ip] >= 5:
+        LOCKED_IPS[ip] = time.time() + LOCKOUT_DURATION
+        logger.warning(f"[SECURITY] IP locked out: {ip}")
+    try:
+        logs = _load_json(FAILED_LOG_FILE, [])
+        if not isinstance(logs, list):
+            logs = []
+        logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "ip": ip, "username": username,
+            "attempts": FAILED_LOGINS[ip],
+        })
+        if len(logs) > 500:
+            logs = logs[-500:]
+        _save_json(FAILED_LOG_FILE, logs)
+    except Exception as e:
+        logger.error(f"[SECURITY] Log fail: {e}")
+
+
+def reset_failed_logins(ip: str):
+    FAILED_LOGINS[ip] = 0
+    if ip in LOCKED_IPS:
+        del LOCKED_IPS[ip]
+
+
+def make_fingerprint(request: Request) -> str:
+    ua = request.headers.get("user-agent", "")
+    lang = request.headers.get("accept-language", "")
+    raw = f"{ua}|{lang}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def check_strong_password(password: str):
+    if len(password) < 8:
+        return False, "Password must be 8+ chars"
+    if not any(c.isupper() for c in password):
+        return False, "Need uppercase letter"
+    if not any(c.islower() for c in password):
+        return False, "Need lowercase letter"
+    if not any(c.isdigit() for c in password):
+        return False, "Need a number"
+    return True, "OK"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -267,7 +383,7 @@ def cleanup_old_tasks(max_age_hours: int = 6):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  AUTH
+#  AUTH (10 LEVELS INTEGRATED)
 # ═══════════════════════════════════════════════════════════════════════════
 def create_session_token(username: str) -> str:
     return serializer.dumps({"u": username, "t": time.time()})
@@ -284,9 +400,25 @@ def verify_session_token(token: str) -> Optional[str]:
 
 
 def get_current_user(request: Request) -> Optional[str]:
-    token = request.cookies.get("spidey_session")
+    token = request.cookies.get("Aloneeop_session")
     if not token:
         return None
+    if token in SESSIONS:
+        sess = SESSIONS[token]
+        now = time.time()
+        # Level 10: idle timeout
+        if now - sess["last_active"] > SESSION_IDLE_TIMEOUT:
+            SESSIONS.pop(token, None)
+            logger.info(f"[SECURITY] Session expired: {sess['uid']}")
+            return None
+        # Level 6: fingerprint
+        current_fp = make_fingerprint(request)
+        if current_fp != sess["fingerprint"]:
+            SESSIONS.pop(token, None)
+            logger.warning(f"[SECURITY] Session hijack: {sess['uid']}")
+            return None
+        sess["last_active"] = now
+        return sess["uid"]
     return verify_session_token(token)
 
 
@@ -430,77 +562,100 @@ async def login_page(request: Request, error: str = None, msg: str = None):
 
 @app.post("/login")
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    ip = get_client_ip(request)
+
+    # LEVEL 2: IP Whitelist
+    if not check_ip_whitelist(ip):
+        logger.warning(f"[SECURITY] Blocked IP: {ip}")
+        return RedirectResponse("/login?error=Access+denied", status_code=302)
+
+    # LEVEL 4: Lockout check
+    allowed, seconds_left = check_lockout(ip)
+    if not allowed:
+        mins = seconds_left // 60
+        logger.warning(f"[SECURITY] Locked out: {ip}")
+        return RedirectResponse(f"/login?error=Locked+out.+Wait+{mins}+min", status_code=302)
+
+    # LEVEL 3: Rate limit
+    if not check_rate_limit(ip):
+        logger.warning(f"[SECURITY] Rate limit: {ip}")
+        return RedirectResponse("/login?error=Too+many+attempts.+Wait+1+min", status_code=302)
+
     username = username.strip().lower()
     users = load_users()
+    GENERIC_ERR = "Invalid+credentials"
+
     if username not in users:
-        return RedirectResponse("/login?error=Invalid+credentials", status_code=302)
+        record_failed_login(ip, username)
+        return RedirectResponse(f"/login?error={GENERIC_ERR}", status_code=302)
+
     user = users[username]
-    if user.get("password") != password:
-        return RedirectResponse("/login?error=Invalid+credentials", status_code=302)
+    stored = user.get("password", "")
+    if not secrets.compare_digest(str(stored), str(password)):
+        record_failed_login(ip, username)
+        logger.warning(f"[SECURITY] Bad pass: {ip} | {username}")
+        return RedirectResponse(f"/login?error={GENERIC_ERR}", status_code=302)
+
     exp = user.get("expires")
     if exp and not user.get("is_admin"):
         try:
             if datetime.fromisoformat(exp) < datetime.now():
+                record_failed_login(ip, username)
                 return RedirectResponse("/login?error=Plan+expired", status_code=302)
         except Exception:
             pass
+
+    # Success
     token = create_session_token(username)
+    fingerprint = make_fingerprint(request)
+    SESSIONS[token] = {
+        "uid": username,
+        "fingerprint": fingerprint,
+        "last_active": time.time(),
+        "ip": ip,
+    }
+    reset_failed_logins(ip)
+    logger.info(f"[login] SUCCESS: {username} from {ip}")
+
     resp = RedirectResponse("/dashboard", status_code=302)
-    resp.set_cookie("spidey_session", token, httponly=True, max_age=SESSION_MAX_AGE, samesite="lax")
-    logger.info(f"[login] {username}")
+    resp.set_cookie(
+        "Aloneeop_session", token,
+        httponly=True,
+        secure=True,             # Level 7: HTTPS only
+        max_age=SESSION_MAX_AGE,
+        samesite="strict",
+    )
     return resp
 
 
 @app.get("/logout")
 async def logout(request: Request):
+    token = request.cookies.get("Aloneeop_session")
+    if token and token in SESSIONS:
+        uid = SESSIONS[token]["uid"]
+        SESSIONS.pop(token, None)
+        logger.info(f"[logout] {uid}")
     resp = RedirectResponse("/login?msg=Logged+out", status_code=302)
-    resp.delete_cookie("spidey_session")
+    resp.delete_cookie("Aloneeop_session")
     return resp
 
 
+# ═══ LEVEL 1: REGISTRATION DISABLED ═══
 @app.get("/register", response_class=HTMLResponse)
-async def register_page(request: Request, error: str = None):
-    return render("register.html", {"request": request, "error": error, "plans": PLANS})
+async def register_page(request: Request):
+    logger.warning(f"[SECURITY] Register attempt: {get_client_ip(request)}")
+    return RedirectResponse("/login?msg=Registration+disabled", status_code=302)
 
 
 @app.post("/register")
-async def register_submit(request: Request, username: str = Form(...), password: str = Form(...), license_key: str = Form(...)):
-    username = username.strip().lower()
-    if len(username) < 3 or not username.isalnum():
-        return RedirectResponse("/register?error=Username+must+be+3%2B+alphanumeric", status_code=302)
-    if len(password) < 4:
-        return RedirectResponse("/register?error=Password+too+short", status_code=302)
-    users = load_users()
-    if username in users:
-        return RedirectResponse("/register?error=Username+taken", status_code=302)
-    keys = load_keys()
-    key = license_key.strip().upper()
-    if key not in keys:
-        return RedirectResponse("/register?error=Invalid+license+key", status_code=302)
-    key_data = keys[key]
-    if key_data.get("used_by"):
-        return RedirectResponse("/register?error=Key+already+used", status_code=302)
-    plan_code = key_data.get("plan", "1d")
-    plan = PLANS.get(plan_code, PLANS["1d"])
-    expires = (datetime.now() + plan["delta"]).isoformat()
-    users[username] = {
-        "username": username, "password": password, "is_admin": False,
-        "created": datetime.now().isoformat(), "plan": plan_code,
-        "plan_label": plan["label"], "expires": expires,
-        "usage": {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0},
-        "limits": {"keywords": 100_000, "dorks": 500_000, "urls": 200_000, "sqli": 100_000, "dumps": 10_000},
-        "proxies": [],
-    }
-    save_users(users)
-    keys[key]["used_by"] = username
-    keys[key]["used_at"] = datetime.now().isoformat()
-    save_keys(keys)
-    token = create_session_token(username)
-    resp = RedirectResponse("/dashboard", status_code=302)
-    resp.set_cookie("spidey_session", token, httponly=True, max_age=SESSION_MAX_AGE, samesite="lax")
-    return resp
+async def register_submit(request: Request):
+    logger.warning(f"[SECURITY] Register POST: {get_client_ip(request)}")
+    return RedirectResponse("/login?msg=Registration+disabled", status_code=302)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUTES — REDEEM
+# ═══════════════════════════════════════════════════════════════════════════
 @app.get("/redeem", response_class=HTMLResponse)
 async def redeem_page(request: Request):
     uid = require_user(request)
@@ -516,7 +671,7 @@ async def redeem_submit(request: Request, license_key: str = Form(...)):
         return RedirectResponse("/dashboard?error=Invalid+key", status_code=302)
     key_data = keys[key]
     if key_data.get("used_by") and key_data["used_by"] != uid:
-        return RedirectResponse("/dashboard?error=Key+used+by+other", status_code=302)
+        return RedirectResponse("/dashboard?error=Key+used", status_code=302)
     plan_code = key_data.get("plan", "1d")
     plan = PLANS.get(plan_code, PLANS["1d"])
     users = load_users()
@@ -531,8 +686,7 @@ async def redeem_submit(request: Request, license_key: str = Form(...)):
                 base = cur_dt
         except Exception:
             pass
-    new_exp = (base + plan["delta"]).isoformat()
-    users[uid]["expires"] = new_exp
+    users[uid]["expires"] = (base + plan["delta"]).isoformat()
     users[uid]["plan"] = plan_code
     users[uid]["plan_label"] = plan["label"]
     save_users(users)
@@ -543,7 +697,7 @@ async def redeem_submit(request: Request, license_key: str = Form(...)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — PAGES
+#  ROUTES — DASHBOARD & PAGES
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, msg: str = None, error: str = None):
@@ -579,6 +733,7 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
         "expiry_str": expiry_str, "is_admin": user.get("is_admin", False),
         "plan_label": user.get("plan_label", "Free Trial"),
         "last": last, "msg": msg, "error": error,
+        "admin_path": ADMIN_PATH,
     })
 
 
@@ -864,7 +1019,6 @@ async def api_proxy_import(request: Request, file: UploadFile = File(...)):
         if p not in seen:
             seen.add(p); current.append(p); added += 1
     save_user_proxies(uid, current)
-    save_last_response(uid, "proxy_import", {"added": added, "total": len(current)})
     return {"ok": True, "added": added, "total": len(current)}
 
 
@@ -883,7 +1037,6 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
     try:
         update_task(tid, status="running")
         update_progress(tid, total=len(proxies), msg="Checking proxies...")
-        add_log(tid, f"Checking {len(proxies)} proxies")
         from core.proxy import check_proxies_bulk
         last_edit = [0.0]
         async def on_prog(done, total, live):
@@ -898,7 +1051,6 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
         save_last_response(uid, "proxy_check", {"checked": len(proxies), "live": len(live_list)})
         update_task(tid, status="done", result={"checked": len(proxies), "live": len(live_list), "dead": len(proxies) - len(live_list)})
         update_progress(tid, done=len(proxies), total=len(proxies), live=len(live_list), msg="Done!")
-        add_log(tid, f"Live: {len(live_list)} / {len(proxies)}")
     except Exception as e:
         logger.exception(f"[proxy_check] {e}")
         update_task(tid, status="error", error=str(e))
@@ -908,7 +1060,6 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
 async def api_proxy_clear(request: Request):
     uid = require_user(request)
     save_user_proxies(uid, [])
-    save_last_response(uid, "proxy_clear", {"cleared": True})
     return {"ok": True, "total": 0}
 
 
@@ -920,7 +1071,6 @@ async def api_proxy_remove(request: Request, proxies: str = Form(...)):
     new = [p for p in current if p not in to_remove]
     removed = len(current) - len(new)
     save_user_proxies(uid, new)
-    save_last_response(uid, "proxy_remove", {"removed": removed, "total": len(new)})
     return {"ok": True, "removed": removed, "total": len(new)}
 
 
@@ -954,9 +1104,7 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
     try:
         update_task(tid, status="running")
         update_progress(tid, total=len(urls), msg="Scanning URLs...")
-        add_log(tid, f"Testing {len(urls)} URLs")
         proxies = get_user_proxies(uid)
-        add_log(tid, f"Using {len(proxies)} proxies")
         from core.sqli import _check_injectable
         import aiohttp
         inj = []
@@ -991,7 +1139,6 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
         save_last_response(uid, "sqli", {"tested": len(urls), "vuln": len(inj), "file": fname})
         update_task(tid, status="done", result={"tested": len(urls), "vuln": len(inj), "file": fname})
         update_progress(tid, done=len(urls), total=len(urls), found=len(inj), msg="Done!")
-        add_log(tid, f"Found {len(inj)} vulnerable URLs")
     except Exception as e:
         logger.exception(f"[sqli] {e}")
         update_task(tid, status="error", error=str(e))
@@ -1028,9 +1175,7 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
     try:
         update_task(tid, status="running")
         update_progress(tid, total=len(urls), msg="Starting sqlmap...")
-        add_log(tid, f"Targets: {len(urls)} URLs")
         proxies = get_user_proxies(uid)
-        add_log(tid, f"Using {len(proxies)} proxies")
         from core.sqlmap_api import api_dump_multiple
         from core.fullz import extract_fullz_from_dir, fullz_records_to_lines
         all_cards = set()
@@ -1085,7 +1230,6 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
         update_task(tid, status="done", result=result)
         update_progress(tid, done=len(urls), total=len(urls),
                         cards=result.get("cards", 0), fullz=result.get("fullz", 0), msg="Done!")
-        add_log(tid, f"Dump complete. CC: {result.get('cards', 0)}, Fullz: {result.get('fullz', 0)}")
     except Exception as e:
         logger.exception(f"[dump] {e}")
         update_task(tid, status="error", error=str(e))
@@ -1118,7 +1262,7 @@ async def api_task_cancel(request: Request, tid: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — DOWNLOAD / FILES
+#  DOWNLOAD / FILES
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/download/{fname}")
 async def download_file(request: Request, fname: str):
@@ -1152,7 +1296,7 @@ async def api_files_delete(request: Request, fname: str = Form(...)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — SETTINGS
+#  SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/settings/password")
 async def api_settings_password(request: Request, old_password: str = Form(...), new_password: str = Form(...)):
@@ -1162,17 +1306,18 @@ async def api_settings_password(request: Request, old_password: str = Form(...),
         return JSONResponse({"error": "User not found"}, status_code=404)
     if users[uid].get("password") != old_password:
         return JSONResponse({"error": "Old password wrong"}, status_code=400)
-    if len(new_password) < 4:
-        return JSONResponse({"error": "Password too short"}, status_code=400)
+    ok, msg = check_strong_password(new_password)
+    if not ok:
+        return JSONResponse({"error": msg}, status_code=400)
     users[uid]["password"] = new_password
     save_users(users)
     return {"ok": True}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — ADMIN
+#  ROUTES — ADMIN (with hidden ADMIN_PATH)
 # ═══════════════════════════════════════════════════════════════════════════
-@app.get("/admin", response_class=HTMLResponse)
+@app.get(ADMIN_PATH, response_class=HTMLResponse)
 async def admin_panel(request: Request):
     uid = require_admin(request)
     users = load_users()
@@ -1185,7 +1330,7 @@ async def admin_panel(request: Request):
     })
 
 
-@app.get("/admin/keys", response_class=HTMLResponse)
+@app.get(ADMIN_PATH + "/keys", response_class=HTMLResponse)
 async def admin_keys(request: Request, msg: str = None):
     uid = require_admin(request)
     keys = load_keys()
@@ -1193,11 +1338,11 @@ async def admin_keys(request: Request, msg: str = None):
     return render("admin_keys.html", {"request": request, "uid": uid, "keys": items, "msg": msg, "plans": PLANS})
 
 
-@app.post("/admin/keys/generate")
+@app.post(ADMIN_PATH + "/keys/generate")
 async def admin_keys_generate(request: Request, plan: str = Form(...), count: int = Form(1)):
     uid = require_admin(request)
     if plan not in PLANS:
-        return RedirectResponse("/admin/keys?msg=Invalid+plan", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Invalid+plan", status_code=302)
     count = max(1, min(100, count))
     keys = load_keys()
     for _ in range(count):
@@ -1206,20 +1351,20 @@ async def admin_keys_generate(request: Request, plan: str = Form(...), count: in
         keys[k] = {"plan": plan, "label": PLANS[plan]["label"],
                    "created": datetime.now().isoformat(), "created_by": uid, "used_by": None}
     save_keys(keys)
-    return RedirectResponse(f"/admin/keys?msg=Generated+{count}+keys", status_code=302)
+    return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Generated+{count}+keys", status_code=302)
 
 
-@app.post("/admin/keys/revoke")
+@app.post(ADMIN_PATH + "/keys/revoke")
 async def admin_keys_revoke(request: Request, key: str = Form(...)):
     uid = require_admin(request)
     keys = load_keys()
     if key in keys:
         del keys[key]; save_keys(keys)
-        return RedirectResponse("/admin/keys?msg=Revoked", status_code=302)
-    return RedirectResponse("/admin/keys?msg=Key+not+found", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Revoked", status_code=302)
+    return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Not+found", status_code=302)
 
 
-@app.get("/admin/users", response_class=HTMLResponse)
+@app.get(ADMIN_PATH + "/users", response_class=HTMLResponse)
 async def admin_users(request: Request, msg: str = None):
     uid = require_admin(request)
     users = load_users()
@@ -1227,26 +1372,26 @@ async def admin_users(request: Request, msg: str = None):
     return render("admin_users.html", {"request": request, "uid": uid, "users": items, "msg": msg})
 
 
-@app.post("/admin/users/delete")
+@app.post(ADMIN_PATH + "/users/delete")
 async def admin_users_delete(request: Request, username: str = Form(...)):
     uid = require_admin(request)
     if username == ADMIN_USERNAME:
-        return RedirectResponse("/admin/users?msg=Cannot+delete+admin", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg=Cannot+delete+admin", status_code=302)
     users = load_users()
     if username in users:
         del users[username]; save_users(users)
-        return RedirectResponse("/admin/users?msg=Deleted", status_code=302)
-    return RedirectResponse("/admin/users?msg=Not+found", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg=Deleted", status_code=302)
+    return RedirectResponse(f"{ADMIN_PATH}/users?msg=Not+found", status_code=302)
 
 
-@app.post("/admin/users/extend")
+@app.post(ADMIN_PATH + "/users/extend")
 async def admin_users_extend(request: Request, username: str = Form(...), plan: str = Form(...)):
     uid = require_admin(request)
     if plan not in PLANS:
-        return RedirectResponse("/admin/users?msg=Invalid+plan", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg=Invalid+plan", status_code=302)
     users = load_users()
     if username not in users:
-        return RedirectResponse("/admin/users?msg=User+not+found", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg=Not+found", status_code=302)
     plan_data = PLANS[plan]
     base = datetime.now()
     cur_exp = users[username].get("expires")
@@ -1259,50 +1404,51 @@ async def admin_users_extend(request: Request, username: str = Form(...), plan: 
     users[username]["plan"] = plan
     users[username]["plan_label"] = plan_data["label"]
     save_users(users)
-    return RedirectResponse("/admin/users?msg=Extended", status_code=302)
+    return RedirectResponse(f"{ADMIN_PATH}/users?msg=Extended", status_code=302)
 
 
-@app.post("/admin/users/reset_password")
+@app.post(ADMIN_PATH + "/users/reset_password")
 async def admin_users_reset(request: Request, username: str = Form(...), new_password: str = Form(...)):
     uid = require_admin(request)
     users = load_users()
     if username not in users:
-        return RedirectResponse("/admin/users?msg=Not+found", status_code=302)
-    if len(new_password) < 4:
-        return RedirectResponse("/admin/users?msg=Password+too+short", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg=Not+found", status_code=302)
+    ok, msg = check_strong_password(new_password)
+    if not ok:
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg={msg.replace(' ', '+')}", status_code=302)
     users[username]["password"] = new_password
     save_users(users)
-    return RedirectResponse("/admin/users?msg=Password+reset", status_code=302)
+    return RedirectResponse(f"{ADMIN_PATH}/users?msg=Password+reset", status_code=302)
 
 
-@app.post("/admin/users/clear_usage")
+@app.post(ADMIN_PATH + "/users/clear_usage")
 async def admin_users_clear_usage(request: Request, username: str = Form(...)):
     uid = require_admin(request)
     users = load_users()
     if username not in users:
-        return RedirectResponse("/admin/users?msg=Not+found", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg=Not+found", status_code=302)
     users[username]["usage"] = {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0}
     save_users(users)
-    return RedirectResponse("/admin/users?msg=Usage+cleared", status_code=302)
+    return RedirectResponse(f"{ADMIN_PATH}/users?msg=Usage+cleared", status_code=302)
 
 
-@app.get("/admin/broadcast", response_class=HTMLResponse)
+@app.get(ADMIN_PATH + "/broadcast", response_class=HTMLResponse)
 async def admin_broadcast_page(request: Request, msg: str = None):
     uid = require_admin(request)
     users = load_users()
     return render("admin_broadcast.html", {"request": request, "uid": uid, "total_users": len(users), "msg": msg})
 
 
-@app.post("/admin/broadcast/send")
+@app.post(ADMIN_PATH + "/broadcast/send")
 async def admin_broadcast_send(request: Request, subject: str = Form(...), message: str = Form(...)):
     uid = require_admin(request)
     bcast_file = os.path.join(DATA_DIR, "broadcast.json")
     _save_json(bcast_file, {"subject": subject, "message": message,
                             "sent_at": datetime.now().isoformat(), "sent_by": uid})
-    return RedirectResponse("/admin/broadcast?msg=Broadcast+sent", status_code=302)
+    return RedirectResponse(f"{ADMIN_PATH}/broadcast?msg=Broadcast+sent", status_code=302)
 
 
-@app.get("/admin/stats", response_class=HTMLResponse)
+@app.get(ADMIN_PATH + "/stats", response_class=HTMLResponse)
 async def admin_stats(request: Request):
     uid = require_admin(request)
     users = load_users()
@@ -1324,6 +1470,8 @@ async def admin_stats(request: Request):
         "active_tasks": len(TASKS),
         "mem": mem_str, "cpu": cpu_str,
         "python": platform.python_version(), "os": platform.system(),
+        "locked_ips": len(LOCKED_IPS),
+        "active_sessions": len(SESSIONS),
     }
     return render("admin_stats.html", {"request": request, "uid": uid, "stats": stats})
 
@@ -1333,9 +1481,11 @@ async def admin_stats(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 @app.on_event("startup")
 async def on_startup():
-    logger.info("🕷️  Spidey Web Dumper starting...")
+    logger.info("🕷️  Aloneeop Web Dumper starting...")
     logger.info(f"📁 Data dir: {DATA_DIR}")
     logger.info(f"📁 Output dir: {OUTPUT_DIR}")
+    logger.info(f"🛡️  Security: {len(ALLOWED_IPS)} IPs whitelisted" if ALLOWED_IPS else "🛡️  No IP whitelist")
+    logger.info(f"🛡️  Admin path: {ADMIN_PATH}")
     load_users()
     load_keys()
     try:
@@ -1350,15 +1500,14 @@ async def on_startup():
             try: cleanup_old_tasks(max_age_hours=6)
             except Exception: pass
     asyncio.create_task(_cleaner())
-    logger.info("✅ Spidey Web Dumper ready")
+    logger.info("✅ Aloneeop Web Dumper ready")
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    logger.info("🕷️  Spidey shutting down...")
+    logger.info("🕷️  Aloneeop  shutting down...")
     try:
-        from core.sqlmap_api import stop_api_server
-        stop_api_server()
+        from core.sqlmap_api import stop_api_server        stop_api_server()
     except Exception: pass
 
 
