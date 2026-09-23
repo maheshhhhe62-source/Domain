@@ -9,45 +9,23 @@
 </head>
 <body>
     <div class="login-wrap">
-        <div class="login-card" style="max-width: 480px; position: relative; overflow: hidden;">
-            
-            <!-- Ambient Glow -->
-            <div style="position: absolute; top: -100px; right: -100px; width: 250px; height: 250px; 
-                        background: radial-gradient(circle, rgba(236,72,153,0.15), transparent 70%); 
-                        pointer-events: none;"></div>
-            <div style="position: absolute; bottom: -80px; left: -80px; width: 200px; height: 200px; 
-                        background: radial-gradient(circle, rgba(139,92,246,0.15), transparent 70%); 
-                        pointer-events: none;"></div>
-
-            <div class="login-logo" style="position: relative; z-index: 1;">🕷️</div>
-            <h1 class="login-title text-glow" style="position: relative; z-index: 1;">CREATE ACCOUNT</h1>
-            <p class="login-sub" style="position: relative; z-index: 1;">
-                Enter your license key to get started
-            </p>
+        <div class="login-card">
+            <div class="login-logo">🕷️</div>
+            <h1 class="login-title text-glow">CREATE ACCOUNT</h1>
+            <p class="login-sub">Enter your license key to register</p>
 
             {% if error %}
-            <div class="alert alert-error" style="margin-bottom: 1rem; position: relative; z-index: 1;">
-                ❌ {{ error }}
-            </div>
+            <div class="alert alert-error" style="margin-bottom: 1rem;">❌ {{ error }}</div>
             {% endif %}
 
             {% if msg %}
-            <div class="alert alert-info" style="margin-bottom: 1rem; position: relative; z-index: 1;">
-                ℹ️ {{ msg }}
-            </div>
+            <div class="alert alert-info" style="margin-bottom: 1rem;">ℹ️ {{ msg }}</div>
             {% endif %}
 
-            <form method="POST" action="/register" autocomplete="off" novalidate 
-                  style="position: relative; z-index: 1;" id="registerForm">
-
-                <!-- License Key -->
+            <form method="POST" action="/register" autocomplete="off" novalidate>
                 <div class="form-group">
-                    <label style="display: flex; align-items: center; gap: 0.4rem;">
-                        <span>🔑</span>
-                        <span>License Key</span>
-                        <span style="color: var(--text-muted); font-weight: 400; font-size: 0.7rem; margin-left: auto;">Required</span>
-                    </label>
-                    <input type="text" name="license_key" id="licenseInput" required
+                    <label>🔑 License Key</label>
+                    <input type="text" name="license_key" required
                            placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
                            maxlength="30"
                            autocomplete="off"
@@ -57,20 +35,12 @@
                            inputmode="text"
                            style="text-transform: uppercase; font-family: 'JetBrains Mono', monospace; 
                                   letter-spacing: 2px; font-weight: 700; font-size: 16px;">
-                    <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;">
-                        Get your key from <a href="/plans" style="color: var(--accent);">plans page</a>
-                    </p>
                 </div>
 
-                <!-- Username -->
                 <div class="form-group">
-                    <label style="display: flex; align-items: center; gap: 0.4rem;">
-                        <span>👤</span>
-                        <span>Username</span>
-                        <span style="color: var(--text-muted); font-weight: 400; font-size: 0.7rem; margin-left: auto;">3-20 chars</span>
-                    </label>
+                    <label>👤 Username</label>
                     <input type="text" name="username" required
-                           placeholder="john_doe"
+                           placeholder="3-20 chars (a-z, 0-9, _)"
                            minlength="3" maxlength="20" 
                            pattern="[a-zA-Z0-9_]+"
                            autocomplete="off"
@@ -81,15 +51,10 @@
                            style="font-size: 16px;">
                 </div>
 
-                <!-- Password -->
                 <div class="form-group">
-                    <label style="display: flex; align-items: center; gap: 0.4rem;">
-                        <span>🔐</span>
-                        <span>Password</span>
-                        <span style="color: var(--text-muted); font-weight: 400; font-size: 0.7rem; margin-left: auto;">8+ chars</span>
-                    </label>
-                    <input type="password" name="password" id="passwordInput" required
-                           placeholder="StrongPassword123"
+                    <label>🔐 Password</label>
+                    <input type="password" name="password" required
+                           placeholder="8+ chars (A-Z, a-z, 0-9)"
                            minlength="8"
                            autocomplete="new-password"
                            autocapitalize="none"
@@ -97,145 +62,25 @@
                            spellcheck="false"
                            inputmode="text"
                            style="font-size: 16px;">
-                    
-                    <!-- Password Strength Indicator -->
-                    <div style="margin-top: 0.5rem;">
-                        <div style="height: 4px; background: rgba(0,0,0,0.4); border-radius: 999px; overflow: hidden;">
-                            <div id="strengthBar" style="height: 100%; width: 0%; background: #ef4444; transition: all 0.3s;"></div>
-                        </div>
-                        <p id="strengthText" style="font-size: 0.68rem; color: var(--text-muted); margin-top: 0.3rem;">
-                            Enter password
-                        </p>
-                    </div>
                 </div>
 
-                <!-- Submit Button -->
-                <button type="submit" class="btn btn-primary btn-block" id="registerBtn"
-                        style="margin-top: 1rem; padding: 1rem; font-size: 1rem; position: relative;">
-                    <span id="btnText">🚀 CREATE ACCOUNT</span>
-                    <span id="btnSpinner" style="display: none;">⏳ CREATING...</span>
+                <button type="submit" class="btn btn-primary btn-block" 
+                        style="margin-top: 0.5rem; padding: 1rem; font-size: 1rem;">
+                    🚀 CREATE ACCOUNT
                 </button>
             </form>
 
-            <div style="text-align: center; margin-top: 1.5rem; color: var(--text-muted); font-size: 0.85rem; position: relative; z-index: 1;">
+            <div style="text-align: center; margin-top: 1.5rem; color: var(--text-muted); font-size: 0.85rem;">
                 Already have an account? 
                 <a href="/login" style="color: var(--accent); font-weight: 700;">Login →</a>
             </div>
 
-            <div style="text-align: center; margin-top: 0.75rem; position: relative; z-index: 1;">
-                <span style="color: var(--text-muted); font-size: 0.75rem;">
-                    🔒 Your data is encrypted
-                </span>
+            <div style="text-align: center; margin-top: 0.75rem;">
+                <a href="/plans" style="color: var(--text-muted); font-size: 0.8rem;">
+                    💎 Need a license key? View plans
+                </a>
             </div>
         </div>
     </div>
-
-    <div class="toast-container" id="toastContainer"></div>
-
-    <script>
-        // ═══ Password Strength Indicator ═══
-        const passwordInput = document.getElementById('passwordInput');
-        const strengthBar = document.getElementById('strengthBar');
-        const strengthText = document.getElementById('strengthText');
-
-        if (passwordInput) {
-            passwordInput.addEventListener('input', function() {
-                const val = this.value;
-                let score = 0;
-                let text = '';
-                let color = '';
-
-                if (val.length === 0) {
-                    strengthBar.style.width = '0%';
-                    strengthText.textContent = 'Enter password';
-                    strengthText.style.color = 'var(--text-muted)';
-                    return;
-                }
-
-                if (val.length >= 8) score++;
-                if (val.length >= 12) score++;
-                if (/[a-z]/.test(val) && /[A-Z]/.test(val)) score++;
-                if (/[0-9]/.test(val)) score++;
-                if (/[^a-zA-Z0-9]/.test(val)) score++;
-
-                if (score <= 2) {
-                    text = '🔴 Weak';
-                    color = '#ef4444';
-                    strengthBar.style.width = '33%';
-                } else if (score <= 3) {
-                    text = '🟡 Medium';
-                    color = '#f59e0b';
-                    strengthBar.style.width = '66%';
-                } else {
-                    text = '🟢 Strong';
-                    color = '#10b981';
-                    strengthBar.style.width = '100%';
-                }
-
-                strengthBar.style.background = color;
-                strengthText.textContent = text;
-                strengthText.style.color = color;
-            });
-        }
-
-        // ═══ Auto-uppercase License Key ═══
-        const licenseInput = document.getElementById('licenseInput');
-        if (licenseInput) {
-            licenseInput.addEventListener('input', function() {
-                this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-            });
-        }
-
-        // ═══ Form Submit - Loading State ═══
-        const form = document.getElementById('registerForm');
-        const registerBtn = document.getElementById('registerBtn');
-        const btnText = document.getElementById('btnText');
-        const btnSpinner = document.getElementById('btnSpinner');
-
-        if (form) {
-            form.addEventListener('submit', function(e) {
-                const license = document.getElementById('licenseInput').value.trim();
-                const username = document.querySelector('input[name="username"]').value.trim();
-                const password = document.getElementById('passwordInput').value;
-
-                if (!license || !username || !password) {
-                    e.preventDefault();
-                    toast('Please fill all fields', 'error');
-                    return;
-                }
-
-                if (username.length < 3) {
-                    e.preventDefault();
-                    toast('Username must be 3+ chars', 'error');
-                    return;
-                }
-
-                if (password.length < 8) {
-                    e.preventDefault();
-                    toast('Password must be 8+ chars', 'error');
-                    return;
-                }
-
-                // Show loading
-                registerBtn.disabled = true;
-                btnText.style.display = 'none';
-                btnSpinner.style.display = 'inline';
-            });
-        }
-
-        // ═══ Toast Helper ═══
-        function toast(msg, type = 'info') {
-            const c = document.getElementById('toastContainer');
-            if (!c) return;
-            const t = document.createElement('div');
-            t.className = 'toast ' + type;
-            t.textContent = msg;
-            c.appendChild(t);
-            setTimeout(() => {
-                t.style.opacity = '0';
-                setTimeout(() => t.remove(), 300);
-            }, 4000);
-        }
-    </script>
 </body>
 </html>
