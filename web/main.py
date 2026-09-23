@@ -1101,21 +1101,41 @@ async def api_sqli_scan(request: Request, urls: str = Form(...)):
 
 
 async def _run_sqli(tid: str, uid: str, urls: List[str]):
+    """SQLi Scanner — Same as bot: 80 workers + proxies"""
     try:
+        total = len(urls)
         update_task(tid, status="running")
-        update_progress(tid, total=len(urls), msg="Scanning URLs...")
+        update_progress(tid, done=0, total=total, found=0, msg=f"Scanning {total} URLs...")
+        add_log(tid, f"Testing {total} URLs")
+
         proxies = get_user_proxies(uid)
+        add_log(tid, f"Using {len(proxies)} proxies")
+
         from core.sqli import _check_injectable
         import aiohttp
+        import random
+
         inj = []
-        sem = asyncio.Semaphore(80)
+        tested = [0]
+        sem = asyncio.Semaphore(80)  # 🎯 BOT JAISA: 80 workers
         last_edit = [0.0]
-        connector = aiohttp.TCPConnector(limit=200, ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        connector = aiohttp.TCPConnector(
+            limit=200, 
+            limit_per_host=20,
+            ssl=False,
+            ttl_dns_cache=300,
+        )
+
+        async with aiohttp.ClientSession(
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as session:
             async def _test(url):
-                if not url: return
+                if not url:
+                    tested[0] += 1
+                    return
                 async with sem:
-                    import random
+                    # 🎯 BOT JAISA: Random proxy rotation
                     px = random.choice(proxies) if proxies else ""
                     try:
                         if await _check_injectable(session, url, px):
@@ -1123,22 +1143,47 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                             add_log(tid, f"🎯 VULN: {url[:80]}")
                     except Exception:
                         pass
+                    tested[0] += 1
+
+                    # Progress update
+                    now = time.time()
+                    if now - last_edit[0] > 1.5:
+                        last_edit[0] = now
+                        update_progress(
+                            tid,
+                            done=tested[0], total=total, found=len(inj),
+                            msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
+                        )
+
+            # 🎯 BOT JAISA: Batch of 500
             BATCH = 500
             for i in range(0, len(urls), BATCH):
                 batch = urls[i:i + BATCH]
                 await asyncio.gather(*[_test(u) for u in batch], return_exceptions=True)
-                now = time.time()
-                if now - last_edit[0] > 1.2:
-                    last_edit[0] = now
-                    done = min(i + BATCH, len(urls))
-                    update_progress(tid, done=done, total=len(urls), found=len(inj),
-                                    msg=f"Tested {done}/{len(urls)} | VULN {len(inj)}")
+
+                update_progress(
+                    tid,
+                    done=tested[0], total=total, found=len(inj),
+                    msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
+                )
+
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"vuln_{len(inj)}_{ts}.txt", "\n".join(inj))
-        consume_quota(uid, "sqli", len(urls))
-        save_last_response(uid, "sqli", {"tested": len(urls), "vuln": len(inj), "file": fname})
-        update_task(tid, status="done", result={"tested": len(urls), "vuln": len(inj), "file": fname})
-        update_progress(tid, done=len(urls), total=len(urls), found=len(inj), msg="Done!")
+
+        consume_quota(uid, "sqli", total)
+        save_last_response(uid, "sqli", {
+            "tested": total,
+            "vuln": len(inj),
+            "file": fname,
+        })
+
+        update_task(tid, status="done", result={
+            "tested": total,
+            "vuln": len(inj),
+            "file": fname,
+        })
+        update_progress(tid, done=total, total=total, found=len(inj), msg="Done!")
+        add_log(tid, f"Found {len(inj)} vulnerable URLs")
     except Exception as e:
         logger.exception(f"[sqli] {e}")
         update_task(tid, status="error", error=str(e))
@@ -1523,3 +1568,8 @@ if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     logger.info(f"🚀 Starting on {host}:{port}")
     uvicorn.run("web.main:app", host=host, port=port, reload=False, log_level="info")
+    
+    
+    
+    
+    
