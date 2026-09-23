@@ -596,13 +596,82 @@ async def logout(request: Request):
     return resp
 
 @app.get("/register", response_class=HTMLResponse)
-async def register_page(request: Request):
-    return RedirectResponse("/login?msg=Registration+disabled", status_code=302)
+async def register_page(request: Request, error: str = None, msg: str = None):
+    return render("register.html", {"request": request, "error": error, "msg": msg})
 
 @app.post("/register")
-async def register_submit(request: Request):
-    return RedirectResponse("/login?msg=Registration+disabled", status_code=302)
-
+async def register_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    license_key: str = Form(...),
+):
+    """Register with license key validation"""
+    ip = get_client_ip(request)
+    
+    # IP + rate limit
+    if not check_ip_whitelist(ip):
+        return RedirectResponse("/register?error=Access+denied", status_code=302)
+    if not check_rate_limit(ip, max_attempts=10, window=300):
+        return RedirectResponse("/register?error=Too+many+attempts", status_code=302)
+    
+    username = username.strip().lower()
+    
+    # Validate username
+    if not username or len(username) < 3 or len(username) > 20:
+        return RedirectResponse("/register?error=Username+must+be+3-20+chars", status_code=302)
+    if not username.isalnum() and not all(c.isalnum() or c == "_" for c in username):
+        return RedirectResponse("/register?error=Only+letters+numbers+underscore", status_code=302)
+    
+    # Validate password
+    ok, msg = check_strong_password(password)
+    if not ok:
+        return RedirectResponse(f"/register?error={msg.replace(' ', '+')}", status_code=302)
+    
+    # Check existing user
+    users = load_users()
+    if username in users:
+        return RedirectResponse("/register?error=Username+taken", status_code=302)
+    
+    # ✅ VALIDATE LICENSE KEY
+    key = license_key.strip().upper()
+    keys = load_keys()
+    if key not in keys:
+        return RedirectResponse("/register?error=Invalid+license+key", status_code=302)
+    
+    key_data = keys[key]
+    if key_data.get("used_by"):
+        return RedirectResponse("/register?error=Key+already+used", status_code=302)
+    
+    # ✅ CREATE USER
+    plan_code = key_data.get("plan", "1d")
+    plan = PLANS.get(plan_code, PLANS["1d"])
+    
+    users[username] = {
+        "username": username,
+        "password": password,
+        "is_admin": False,
+        "created": datetime.now().isoformat(),
+        "plan": plan_code,
+        "plan_label": plan["label"],
+        "expires": (datetime.now() + plan["delta"]).isoformat(),
+        "usage": {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0},
+        "limits": {
+            "keywords": 500000, "dorks": 500000, "urls": 500000,
+            "sqli": 100000, "dumps": 1000,
+        },
+        "proxies": [],
+        "proxy_stats": {"live": 0, "dead": 0, "total": 0, "checked_at": None},
+    }
+    save_users(users)
+    
+    # ✅ MARK KEY AS USED
+    keys[key]["used_by"] = username
+    keys[key]["used_at"] = datetime.now().isoformat()
+    save_keys(keys)
+    
+    logger.info(f"[register] New user: {username} | plan: {plan_code} | key: {key[:10]}...")
+    return RedirectResponse("/login?msg=Account+created!+Login+now", status_code=302)
 # ═══════════════════════════════════════════════════════════════════════════
 #  ROUTES — REDEEM
 # ═══════════════════════════════════════════════════════════════════════════
@@ -842,6 +911,67 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
         logger.exception(f"[dorks] {e}")
         update_task(tid, status="error", error=str(e))
 
+
+
+
+
+async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
+    """🎯 CLEAN Proxy Check — no hang, live progress"""
+    try:
+        total = len(proxies)
+        logger.info(f"[proxy_check:{tid}] STARTED with {total} proxies")
+        
+        update_task(tid, status="running")
+        update_progress(tid, done=0, total=total, live=0, msg=f"Checking {total} proxies...")
+        add_log(tid, f"⚡ Checking {total} proxies...")
+        
+        from core.proxy import check_proxies_bulk
+        last_edit = [time.time()]
+        
+        async def on_prog(checked, tot, live):
+            if is_cancelled(tid):
+                return
+            now = time.time()
+            if now - last_edit[0] >= 1.0:
+                last_edit[0] = now
+                update_progress(tid, done=checked, total=tot, live=live,
+                                msg=f"Checked {checked}/{tot} | Live {live}")
+                logger.info(f"[proxy_check:{tid}] {checked}/{tot} | Live {live}")
+        
+        live_list = await check_proxies_bulk(
+            proxies, timeout=5.0, concurrency=300, progress_callback=on_prog
+        )
+        
+        logger.info(f"[proxy_check:{tid}] Done. Live: {len(live_list)}")
+        
+        if is_cancelled(tid):
+            add_log(tid, "⛔ Cancelled")
+            update_progress(tid, msg="⛔ Cancelled")
+            return
+        
+        dead_count = total - len(live_list)
+        save_user_proxies(uid, live_list)
+        save_proxy_stats(uid, live=len(live_list), dead=dead_count, total=total)
+        save_last_response(uid, "proxy_check", {
+            "checked": total, "live": len(live_list), "dead": dead_count
+        })
+        
+        update_task(tid, status="done", result={
+            "checked": total, "live": len(live_list), "dead": dead_count
+        })
+        update_progress(tid, done=total, total=total, live=len(live_list), msg="✅ Done!")
+        add_log(tid, f"✅ Live: {len(live_list)}/{total} | Dead: {dead_count}")
+        logger.info(f"[proxy_check:{tid}] FINISHED")
+        
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
+    except Exception as e:
+        logger.exception(f"[proxy_check:{tid}] ERROR")
+        update_task(tid, status="error", error=str(e))
+        add_log(tid, f"❌ Error: {str(e)[:200]}")
+        
+        
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — PARSER
 # ═══════════════════════════════════════════════════════════════════════════
@@ -936,35 +1066,23 @@ async def api_proxy_check(request: Request):
     proxies = get_user_proxies(uid)
     if not proxies:
         return JSONResponse({"error": "No proxies to check"}, status_code=400)
+    
+    logger.info(f"[proxy_check] User {uid} requested check of {len(proxies)} proxies")
     tid = new_task(uid, "proxy_check", {"total": len(proxies)})
-    asyncio.create_task(_run_proxy_check(tid, uid, proxies))
+    
+    task = asyncio.create_task(_run_proxy_check(tid, uid, proxies))
+    
+    def _on_done(t):
+        try:
+            t.result()
+        except Exception as e:
+            logger.exception(f"[proxy_check] Task {tid} crashed")
+            update_task(tid, status="error", error=f"Crash: {str(e)[:200]}")
+    
+    task.add_done_callback(_on_done)
     return {"task_id": tid}
 
-async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
-    try:
-        total = len(proxies)
-        update_task(tid, status="running")
-        update_progress(tid, total=total, msg=f"Checking {total} proxies...")
-        add_log(tid, f"Checking {total} proxies")
-        from core.proxy import check_proxies_bulk
-        last_edit = [time.time()]
-        async def on_prog(done, tot, live):
-            now = time.time()
-            if now - last_edit[0] < 1.0:
-                return
-            last_edit[0] = now
-            update_progress(tid, done=done, total=tot, live=live, msg=f"Checked {done}/{tot} | Live {live}")
-        live_list = await check_proxies_bulk(proxies, timeout=5.0, concurrency=200, progress_callback=on_prog)
-        dead_count = len(proxies) - len(live_list)
-        save_user_proxies(uid, live_list)
-        save_proxy_stats(uid, live=len(live_list), dead=dead_count, total=total)
-        save_last_response(uid, "proxy_check", {"checked": len(proxies), "live": len(live_list), "dead": dead_count})
-        update_task(tid, status="done", result={"checked": len(proxies), "live": len(live_list), "dead": dead_count})
-        update_progress(tid, done=total, total=total, live=len(live_list), msg="✅ Done!")
-        add_log(tid, f"✅ Live: {len(live_list)}/{total}")
-    except Exception as e:
-        logger.exception(f"[proxy_check] {e}")
-        update_task(tid, status="error", error=str(e))
+
 
 @app.post("/api/proxy/clear")
 async def api_proxy_clear(request: Request):
