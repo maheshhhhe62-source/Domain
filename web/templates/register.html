@@ -1,487 +1,58 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Create Account — Spidey</title>
-<link rel="stylesheet" href="/static/style.css">
-
-<style>
-.auth-page{
-    min-height:100vh;
-    display:grid;
-    place-items:center;
-    padding:24px;
-    position:relative;
-    overflow:hidden;
-}
-
-.auth-page::before{
-    content:"";
-    position:absolute;
-    width:500px;
-    height:500px;
-    left:-250px;
-    bottom:-220px;
-    border-radius:50%;
-    background:rgba(124,58,237,.20);
-    filter:blur(110px);
-    animation:moveA 13s ease-in-out infinite;
-}
-
-.auth-page::after{
-    content:"";
-    position:absolute;
-    width:430px;
-    height:430px;
-    right:-200px;
-    top:-180px;
-    border-radius:50%;
-    background:rgba(236,72,153,.17);
-    filter:blur(110px);
-    animation:moveB 15s ease-in-out infinite;
-}
-
-@keyframes moveA{
-    50%{transform:translate(90px,-70px) scale(1.12)}
-}
-
-@keyframes moveB{
-    50%{transform:translate(-80px,80px) scale(1.1)}
-}
-
-.register-card{
-    position:relative;
-    z-index:2;
-
-    width:min(100%,460px);
-
-    padding:38px;
-
-    border-radius:28px;
-
-    background:
-        linear-gradient(
-            145deg,
-            rgba(17,24,39,.89),
-            rgba(5,8,18,.95)
-        );
-
-    border:1px solid rgba(255,255,255,.09);
-
-    backdrop-filter:blur(30px);
-    -webkit-backdrop-filter:blur(30px);
-
-    box-shadow:
-        0 35px 100px rgba(0,0,0,.65),
-        0 0 80px rgba(124,58,237,.12),
-        inset 0 1px rgba(255,255,255,.07);
-
-    animation:registerIn .65s cubic-bezier(.16,1,.3,1);
-}
-
-.register-card::before{
-    content:"";
-    position:absolute;
-    left:15%;
-    right:15%;
-    top:0;
-    height:1px;
-
-    background:
-        linear-gradient(
-            90deg,
-            transparent,
-            #8b5cf6,
-            #ec4899,
-            transparent
-        );
-}
-
-@keyframes registerIn{
-    from{
-        opacity:0;
-        transform:translateY(25px) scale(.96);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
-}
-
-.register-brand{
-    text-align:center;
-    margin-bottom:27px;
-}
-
-.register-logo{
-    width:70px;
-    height:70px;
-
-    display:grid;
-    place-items:center;
-
-    margin:0 auto 17px;
-
-    border-radius:21px;
-
-    font-size:32px;
-
-    background:
-        linear-gradient(
-            135deg,
-            rgba(139,92,246,.22),
-            rgba(236,72,153,.14)
-        );
-
-    border:1px solid rgba(167,139,250,.25);
-
-    box-shadow:
-        0 0 45px rgba(139,92,246,.22),
-        inset 0 1px rgba(255,255,255,.08);
-
-    animation:logoFloat 3.5s ease-in-out infinite;
-}
-
-@keyframes logoFloat{
-    50%{
-        transform:translateY(-5px) rotate(2deg);
-    }
-}
-
-.register-title{
-    margin:0;
-
-    font-size:clamp(1.65rem,6vw,2.05rem);
-    font-weight:900;
-    letter-spacing:-.05em;
-
-    background:
-        linear-gradient(
-            100deg,
-            #c4b5fd,
-            #f0abfc,
-            #67e8f9
-        );
-
-    -webkit-background-clip:text;
-    background-clip:text;
-    color:transparent;
-}
-
-.register-sub{
-    margin-top:8px;
-    color:#718096;
-    font-size:.8rem;
-}
-
-.register-form{
-    display:flex;
-    flex-direction:column;
-    gap:16px;
-}
-
-.register-field label{
-    display:block;
-    margin-bottom:7px;
-
-    color:#9aa7ba;
-
-    font-size:.67rem;
-    font-weight:800;
-
-    text-transform:uppercase;
-    letter-spacing:.1em;
-}
-
-.register-input-wrap{
-    position:relative;
-}
-
-.register-icon{
-    position:absolute;
-    left:14px;
-    top:50%;
-    transform:translateY(-50%);
-
-    font-size:16px;
-    opacity:.55;
-
-    pointer-events:none;
-}
-
-.register-input{
-    width:100%;
-    height:49px;
-
-    padding:0 14px 0 44px;
-
-    color:#f8fafc;
-
-    background:
-        rgba(2,5,12,.68);
-
-    border:
-        1px solid rgba(255,255,255,.08);
-
-    border-radius:14px;
-
-    outline:none;
-
-    font:inherit;
-    font-size:.84rem;
-
-    transition:.25s ease;
-}
-
-.register-input::placeholder{
-    color:#4f5d70;
-}
-
-.register-input:focus{
-    border-color:rgba(139,92,246,.7);
-
-    box-shadow:
-        0 0 0 4px rgba(139,92,246,.09),
-        0 0 30px rgba(139,92,246,.12);
-}
-
-.license-input{
-    font-family:
-        "JetBrains Mono",
-        "Courier New",
-        monospace;
-
-    text-transform:uppercase;
-    letter-spacing:.09em;
-    font-weight:700;
-}
-
-.register-submit{
-    width:100%;
-    height:52px;
-
-    margin-top:5px;
-
-    border:0;
-    border-radius:14px;
-
-    color:white;
-
-    background:
-        linear-gradient(
-            110deg,
-            #6d28d9,
-            #8b5cf6,
-            #ec4899
-        );
-
-    background-size:200% auto;
-
-    font-size:.84rem;
-    font-weight:850;
-
-    cursor:pointer;
-
-    box-shadow:
-        0 12px 30px rgba(124,58,237,.3);
-
-    transition:.3s ease;
-}
-
-.register-submit:hover{
-    transform:translateY(-2px);
-    background-position:right center;
-
-    box-shadow:
-        0 18px 42px rgba(124,58,237,.42);
-}
-
-.info-box{
-    margin-top:19px;
-    padding:14px;
-
-    border-radius:14px;
-
-    color:#a5b4fc;
-
-    background:
-        linear-gradient(
-            135deg,
-            rgba(139,92,246,.075),
-            rgba(236,72,153,.045)
-        );
-
-    border:
-        1px solid rgba(139,92,246,.17);
-
-    font-size:.72rem;
-    line-height:1.65;
-}
-
-.info-box strong{
-    color:#c4b5fd;
-}
-
-.register-status{
-    padding:12px 14px;
-    margin-bottom:17px;
-
-    border-radius:13px;
-
-    font-size:.77rem;
-}
-
-.register-status.error{
-    color:#fca5a5;
-    background:rgba(239,68,68,.08);
-    border:1px solid rgba(239,68,68,.2);
-}
-
-.register-footer{
-    margin-top:20px;
-
-    text-align:center;
-
-    color:#64748b;
-    font-size:.77rem;
-}
-
-.register-footer a{
-    color:#a78bfa;
-    font-weight:800;
-    text-decoration:none;
-}
-
-.register-footer a:hover{
-    color:#f0abfc;
-}
-
-@media(max-width:480px){
-    .auth-page{
-        padding:14px;
-    }
-
-    .register-card{
-        padding:28px 20px 23px;
-        border-radius:23px;
-    }
-
-    .register-logo{
-        width:61px;
-        height:61px;
-        font-size:27px;
-    }
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register — Spidey Dumper</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
-
 <body>
+    <div class="login-wrap">
+        <div class="login-card">
+            <div class="login-logo">🕷️</div>
+            <h1 class="login-title text-glow">CREATE ACCOUNT</h1>
+            <p class="login-sub">Enter license key to register</p>
 
-<div class="auth-page">
+            {% if error %}
+            <div class="alert alert-error">❌ {{ error }}</div>
+            {% endif %}
 
-    <main class="register-card">
+            {% if msg %}
+            <div class="alert alert-info">ℹ️ {{ msg }}</div>
+            {% endif %}
 
-        <div class="register-brand">
+            <form method="POST" action="/register">
+                <div class="form-group">
+                    <label>🔑 License Key</label>
+                    <input type="text" name="license_key" required
+                           placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
+                           style="text-transform: uppercase; font-family: 'JetBrains Mono', monospace; letter-spacing: 1px;">
+                </div>
+                <div class="form-group">
+                    <label>👤 Username</label>
+                    <input type="text" name="username" required
+                           placeholder="3-20 chars (letters, numbers, _)"
+                           minlength="3" maxlength="20" pattern="[a-zA-Z0-9_]+">
+                </div>
+                <div class="form-group">
+                    <label>🔐 Password</label>
+                    <input type="password" name="password" required
+                           placeholder="8+ chars (upper + lower + number)"
+                           minlength="8">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">
+                    🚀 CREATE ACCOUNT
+                </button>
+            </form>
 
-            <div class="register-logo">🕷️</div>
-
-            <h1 class="register-title">
-                CREATE ACCOUNT
-            </h1>
-
-            <p class="register-sub">
-                Set up your account and get started.
+            <p class="login-footer">
+                Already have an account?
+                <a href="/login" style="color: var(--accent);">Login →</a>
             </p>
-
+            <p class="login-footer">
+                Need a key? <a href="/plans" style="color: var(--accent);">View plans</a>
+            </p>
         </div>
-
-        {% if error %}
-        <div class="register-status error">
-            ❌ {{ error }}
-        </div>
-        {% endif %}
-
-        <form
-            method="POST"
-            action="/register"
-            class="register-form">
-
-            <div class="register-field">
-                <label>Username</label>
-
-                <div class="register-input-wrap">
-                    <span class="register-icon">👤</span>
-
-                    <input
-                        class="register-input"
-                        type="text"
-                        name="username"
-                        required
-                        autofocus
-                        minlength="3"
-                        autocomplete="username"
-                        placeholder="Choose a username">
-                </div>
-            </div>
-
-            <div class="register-field">
-                <label>Password</label>
-
-                <div class="register-input-wrap">
-                    <span class="register-icon">🔐</span>
-
-                    <input
-                        class="register-input"
-                        type="password"
-                        name="password"
-                        required
-                        minlength="4"
-                        autocomplete="new-password"
-                        placeholder="Create a password">
-                </div>
-            </div>
-
-            <div class="register-field">
-                <label>License Key</label>
-
-                <div class="register-input-wrap">
-                    <span class="register-icon">🔑</span>
-
-                    <input
-                        class="register-input license-input"
-                        type="text"
-                        name="license_key"
-                        required
-                        autocomplete="off"
-                        placeholder="XXXXX-XXXXX-XXXXX">
-                </div>
-            </div>
-
-            <button
-                class="register-submit"
-                type="submit">
-
-                CREATE ACCOUNT &nbsp;→
-
-            </button>
-
-        </form>
-
-        <div class="info-box">
-            <strong>✨ Account activation</strong><br>
-            Enter the license key provided by your administrator.
-            Your account will be activated after the key is verified.
-        </div>
-
-        <div class="register-footer">
-            Already have an account?
-            <a href="/login">Sign in →</a>
-        </div>
-
-    </main>
-
-</div>
-
+    </div>
 </body>
 </html>
