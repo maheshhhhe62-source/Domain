@@ -77,6 +77,7 @@ app = FastAPI(title="Spidey Web Dumper", docs_url=None, redoc_url=None)
 
 # Simple Jinja2 — no env objects (prevents dict error)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.auto_reload = True
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 serializer = URLSafeTimedSerializer(SECRET_KEY)
