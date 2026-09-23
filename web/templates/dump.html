@@ -26,16 +26,17 @@
         <p class="card-sub">Dump vulnerable URLs — extract CC + Fullz</p>
 
         {% if last %}
-        <div class="alert alert-success" style="margin-top: 1rem;">
-            📋 Last dump: <strong>{{ last.tested }}</strong> URLs, 
-            CC: <strong>{{ last.cards }}</strong>, 
-            Fullz: <strong>{{ last.fullz }}</strong>
+        <div class="alert alert-info" style="margin-top: 1rem;">
+            📋 Last dump: <strong>{{ last.tested }}</strong> URLs | 
+            CC: <strong>{{ last.cards }}</strong> | 
+            Fullz: <strong>{{ last.fullz }}</strong> |
+            Raw: <strong>{{ last.alldump_lines or 0 }}</strong> lines
         </div>
         {% endif %}
 
         <div class="card" style="margin-top: 1.5rem;">
             <h3>💉 Vulnerable URLs (one per line)</h3>
-            <textarea id="urlsInput" placeholder="http://vuln.com/page.php?id=1
+            <textarea id="urlsInput" style="min-height: 200px;" placeholder="http://vuln.com/page.php?id=1
 http://test.com/view.php?cat=2"></textarea>
             <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
                 <input type="file" id="fileInput" accept=".txt" onchange="loadFile(event)" style="display: none;">
@@ -48,7 +49,6 @@ http://test.com/view.php?cat=2"></textarea>
             </div>
         </div>
 
-        <!-- SQLMap Settings -->
         <div class="card" style="margin-top: 1.5rem;">
             <h3>⚙️ SQLMap Settings</h3>
             <div class="grid grid-3" style="margin-top: 1rem;">
@@ -79,12 +79,15 @@ http://test.com/view.php?cat=2"></textarea>
             </div>
         </div>
 
-        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem;" onclick="runDump()">
+        <button class="btn btn-primary btn-block" style="margin-top: 1.5rem; padding: 1rem;" onclick="runDump()" id="genBtn">
             🚀 START DUMP
         </button>
 
         <div id="progressBox" class="card hidden" style="margin-top: 1.5rem;">
-            <h3 id="progressTitle">⏳ Dumping...</h3>
+            <div class="flex justify-between items-center">
+                <h3 id="progressTitle">⏳ Dumping...</h3>
+                <button id="stopBtn" class="btn btn-stop" onclick="stopScan()" style="display:none;">⛔ STOP</button>
+            </div>
             <div class="progress-wrap">
                 <div id="progressBar" class="progress-bar"></div>
             </div>
@@ -110,20 +113,44 @@ http://test.com/view.php?cat=2"></textarea>
         <div id="resultBox" class="card hidden" style="margin-top: 1.5rem;"></div>
     </div>
 
+    <div class="toast-container" id="toastContainer"></div>
+
     <script>
+        let currentTaskId = null;
+        let pollInterval = null;
+
+        function toast(msg, type = 'info') {
+            const c = document.getElementById('toastContainer');
+            if (!c) return;
+            const t = document.createElement('div');
+            t.className = 'toast ' + type;
+            t.textContent = msg;
+            c.appendChild(t);
+            setTimeout(() => {
+                t.style.opacity = '0';
+                setTimeout(() => t.remove(), 300);
+            }, 4000);
+        }
+
         function loadFile(e) {
             const f = e.target.files[0];
             if (!f) return;
             const r = new FileReader();
-            r.onload = ev => {
-                document.getElementById('urlsInput').value = ev.target.result;
-            };
+            r.onload = ev => { document.getElementById('urlsInput').value = ev.target.result; };
             r.readAsText(f);
         }
 
         async function runDump() {
             const urls = document.getElementById('urlsInput').value.trim();
-            if (!urls) { alert('Paste URLs first!'); return; }
+            if (!urls) { toast('Paste URLs first!', 'error'); return; }
+            
+            document.getElementById('genBtn').disabled = true;
+            document.getElementById('genBtn').textContent = '⏳ Dumping...';
+            document.getElementById('progressBox').classList.remove('hidden');
+            document.getElementById('stopBtn').style.display = 'inline-flex';
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('stopBtn').textContent = '⛔ STOP';
+
             const fd = new FormData();
             fd.append('urls', urls);
             fd.append('level', document.getElementById('level').value);
@@ -133,71 +160,165 @@ http://test.com/view.php?cat=2"></textarea>
             fd.append('tamper', document.getElementById('tamper').value);
             fd.append('crawl', document.getElementById('crawl').value);
 
-            const r = await fetch('/api/dump/run', { method: 'POST', body: fd });
-            const d = await r.json();
-            if (d.error) { alert(d.error); return; }
-            pollTask(d.task_id);
+            try {
+                const r = await fetch('/api/dump/run', { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.error) { toast(d.error, 'error'); reset(); return; }
+                currentTaskId = d.task_id;
+                toast('Dump started', 'info');
+                startPolling(d.task_id);
+            } catch (e) {
+                toast('Network error', 'error');
+                reset();
+            }
         }
 
-        async function pollTask(tid) {
-            const pb = document.getElementById('progressBox');
-            pb.classList.remove('hidden');
-            const logBox = document.getElementById('logBox');
-            logBox.textContent = '';
+        function reset() {
+            document.getElementById('genBtn').disabled = false;
+            document.getElementById('genBtn').textContent = '🚀 START DUMP';
+            document.getElementById('stopBtn').style.display = 'none';
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('stopBtn').textContent = '⛔ STOP';
+        }
 
-            while (true) {
-                await new Promise(r => setTimeout(r, 1500));
-                const r = await fetch(`/api/task/${tid}`);
-                const t = await r.json();
-                if (!t) break;
-
-                const p = t.progress || {};
-                const done = p.done || 0;
-                const total = p.total || 0;
-                const pct = total ? Math.round(done * 100 / total) : 0;
-
-                document.getElementById('progressBar').style.width = pct + '%';
-                document.getElementById('progressText').textContent = `${done}/${total} — ${p.msg || ''}`;
-                document.getElementById('progressPct').textContent = pct + '%';
-                document.getElementById('ccCount').textContent = p.cards || 0;
-                document.getElementById('fullzCount').textContent = p.fullz || 0;
-
-                if (p.log && p.log.length) {
-                    logBox.textContent = p.log.join('\n');
-                    logBox.scrollTop = logBox.scrollHeight;
-                }
-
-                if (t.status === 'done') {
-                    showResult(t.result || {});
-                    return;
-                }
-                if (t.status === 'error') {
-                    showResult({ error: t.error });
-                    return;
-                }
+        async function stopScan() {
+            if (!currentTaskId) return;
+            if (!confirm('Dump rok du?')) return;
+            try {
+                await fetch(`/api/task/${currentTaskId}/cancel`, { method: 'POST' });
+                document.getElementById('stopBtn').disabled = true;
+                document.getElementById('stopBtn').textContent = '⛔ STOPPED';
+                if (pollInterval) clearInterval(pollInterval);
+                toast('Stopped', 'warning');
+                reset();
+            } catch (e) {
+                toast('Failed to stop', 'error');
             }
+        }
+
+        function startPolling(tid) {
+            if (pollInterval) clearInterval(pollInterval);
+            
+            pollInterval = setInterval(async () => {
+                try {
+                    const r = await fetch(`/api/task/${tid}`);
+                    if (!r.ok) return;
+                    const t = await r.json();
+                    if (!t || !t.status) { clearInterval(pollInterval); return; }
+
+                    const p = t.progress || {};
+                    const done = p.done || 0;
+                    const total = p.total || 0;
+                    const pct = total ? Math.round(done * 100 / total) : 0;
+
+                    document.getElementById('progressBar').style.width = pct + '%';
+                    document.getElementById('progressText').textContent = `${done}/${total} — ${p.msg || ''}`;
+                    document.getElementById('progressPct').textContent = pct + '%';
+                    document.getElementById('ccCount').textContent = p.cards || 0;
+                    document.getElementById('fullzCount').textContent = p.fullz || 0;
+
+                    const logBox = document.getElementById('logBox');
+                    if (p.log && p.log.length) {
+                        logBox.textContent = p.log.join('\n');
+                        logBox.scrollTop = logBox.scrollHeight;
+                    }
+
+                    if (t.status === 'done') {
+                        clearInterval(pollInterval);
+                        showResult(t.result || {});
+                        toast('Dump complete!', 'success');
+                        reset();
+                    } else if (t.status === 'error') {
+                        clearInterval(pollInterval);
+                        toast('Error: ' + (t.error || 'unknown'), 'error');
+                        showResult({ error: t.error });
+                        reset();
+                    } else if (t.status === 'cancelled') {
+                        clearInterval(pollInterval);
+                        toast('Cancelled', 'warning');
+                        reset();
+                    }
+                } catch (e) {
+                    console.error('Poll error:', e);
+                }
+            }, 1500);
         }
 
         function showResult(res) {
             const box = document.getElementById('resultBox');
             box.classList.remove('hidden');
+            
             if (res.error) {
-                box.innerHTML = `<h3>❌ Error: ${res.error}</h3>`;
+                box.innerHTML = `<h3 style="color: var(--error);">❌ Error: ${res.error}</h3>`;
                 return;
             }
-            let html = `<h3>✅ Dump Complete</h3>
-                <p>Cards found: <strong>${res.cards || 0}</strong></p>
-                <p>Fullz found: <strong>${res.fullz || 0}</strong></p>
-                <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">`;
+            
+            let html = `
+                <h3 style="color: var(--success);">✅ Dump Complete</h3>
+                <div class="flex gap-4" style="margin-top: 1rem; flex-wrap: wrap;">
+                    <div class="stat-card" style="flex:1; min-width: 120px; padding:1rem;">
+                        <div class="stat-icon">💳</div>
+                        <div class="stat-value">${res.cards || 0}</div>
+                        <div class="stat-label">Cards</div>
+                    </div>
+                    <div class="stat-card" style="flex:1; min-width: 120px; padding:1rem;">
+                        <div class="stat-icon">📋</div>
+                        <div class="stat-value">${res.fullz || 0}</div>
+                        <div class="stat-label">Fullz</div>
+                    </div>
+                    <div class="stat-card" style="flex:1; min-width: 120px; padding:1rem;">
+                        <div class="stat-icon">📊</div>
+                        <div class="stat-value">${res.alldump_lines || 0}</div>
+                        <div class="stat-label">Raw Lines</div>
+                    </div>
+                </div>
+                <div class="flex gap-2" style="margin-top: 1rem; flex-wrap: wrap;">
+            `;
+            
             if (res.cards_file) {
-                html += `<a href="/download/${res.cards_file}" class="btn btn-primary">📥 Download CC File</a>`;
+                html += `<a href="/download/${res.cards_file}" class="btn btn-primary">📥 CC File (${res.cards})</a>`;
             }
             if (res.fullz_file) {
-                html += `<a href="/download/${res.fullz_file}" class="btn btn-success">📥 Download Fullz File</a>`;
+                html += `<a href="/download/${res.fullz_file}" class="btn btn-success">📥 Fullz File (${res.fullz})</a>`;
             }
+            if (res.alldump_file) {
+                html += `<a href="/download/${res.alldump_file}" class="btn btn-secondary">📊 AllDumps (${res.alldump_lines} lines)</a>`;
+            }
+            
             html += `</div>`;
+            
+            if (!res.cards && !res.fullz && !res.alldump_lines) {
+                html += `
+                    <div class="alert alert-warning" style="margin-top: 1rem;">
+                        ⚠️ <strong>Kuch nahi mila</strong> — Check karo:
+                        <ul style="margin-top: 0.5rem; margin-left: 1.5rem;">
+                            <li>URL actually vulnerable hai?</li>
+                            <li>Proxy live hai?</li>
+                            <li>sqlmap ko zyada time do (level 5, risk 3)</li>
+                        </ul>
+                    </div>
+                `;
+            }
+            
             box.innerHTML = html;
         }
+
+        // Auto-resume on refresh
+        window.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const r = await fetch('/api/tasks/active');
+                const d = await r.json();
+                if (d.task_id && d.task && d.task.type === 'dump') {
+                    currentTaskId = d.task_id;
+                    document.getElementById('genBtn').disabled = true;
+                    document.getElementById('genBtn').textContent = '⏳ Dumping...';
+                    document.getElementById('progressBox').classList.remove('hidden');
+                    document.getElementById('stopBtn').style.display = 'inline-flex';
+                    startPolling(d.task_id);
+                    toast('Resumed', 'info');
+                }
+            } catch (e) {}
+        });
     </script>
 </body>
 </html>
