@@ -1,50 +1,454 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login — Spidey Dumper</title>
-    <link rel="stylesheet" href="/static/style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Spidey</title>
+<link rel="stylesheet" href="/static/style.css">
+
+<style>
+.auth-page{
+    min-height:100vh;
+    display:grid;
+    place-items:center;
+    padding:24px;
+    position:relative;
+    overflow:hidden;
+}
+
+.auth-page::before{
+    content:"";
+    position:absolute;
+    width:520px;
+    height:520px;
+    left:-260px;
+    top:-220px;
+    border-radius:50%;
+    background:rgba(124,58,237,.22);
+    filter:blur(110px);
+    animation:orb1 12s ease-in-out infinite;
+}
+
+.auth-page::after{
+    content:"";
+    position:absolute;
+    width:450px;
+    height:450px;
+    right:-230px;
+    bottom:-220px;
+    border-radius:50%;
+    background:rgba(236,72,153,.18);
+    filter:blur(110px);
+    animation:orb2 14s ease-in-out infinite;
+}
+
+@keyframes orb1{
+    50%{transform:translate(100px,80px) scale(1.15)}
+}
+@keyframes orb2{
+    50%{transform:translate(-80px,-60px) scale(1.12)}
+}
+
+.auth-card{
+    width:min(100%,430px);
+    position:relative;
+    z-index:2;
+    padding:38px;
+    border-radius:28px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(17,24,39,.88),
+            rgba(5,8,18,.94)
+        );
+
+    border:1px solid rgba(255,255,255,.09);
+
+    backdrop-filter:blur(30px);
+    -webkit-backdrop-filter:blur(30px);
+
+    box-shadow:
+        0 35px 100px rgba(0,0,0,.65),
+        0 0 80px rgba(124,58,237,.12),
+        inset 0 1px rgba(255,255,255,.07);
+
+    animation:cardIn .65s cubic-bezier(.16,1,.3,1);
+}
+
+@keyframes cardIn{
+    from{
+        opacity:0;
+        transform:translateY(25px) scale(.96);
+    }
+    to{
+        opacity:1;
+        transform:none;
+    }
+}
+
+.auth-card::before{
+    content:"";
+    position:absolute;
+    left:15%;
+    right:15%;
+    top:0;
+    height:1px;
+    background:linear-gradient(
+        90deg,
+        transparent,
+        #8b5cf6,
+        #ec4899,
+        transparent
+    );
+}
+
+.auth-brand{
+    text-align:center;
+    margin-bottom:30px;
+}
+
+.auth-logo{
+    width:72px;
+    height:72px;
+    margin:0 auto 18px;
+
+    display:grid;
+    place-items:center;
+
+    border-radius:22px;
+
+    font-size:34px;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(139,92,246,.22),
+            rgba(236,72,153,.13)
+        );
+
+    border:1px solid rgba(167,139,250,.25);
+
+    box-shadow:
+        0 0 45px rgba(139,92,246,.22),
+        inset 0 1px rgba(255,255,255,.08);
+
+    animation:logoFloat 3.5s ease-in-out infinite;
+}
+
+@keyframes logoFloat{
+    50%{
+        transform:translateY(-5px) rotate(-2deg);
+    }
+}
+
+.auth-title{
+    margin:0;
+    font-size:clamp(1.7rem,6vw,2.15rem);
+    font-weight:900;
+    letter-spacing:-.05em;
+
+    background:
+        linear-gradient(
+            100deg,
+            #c4b5fd,
+            #f0abfc,
+            #67e8f9
+        );
+
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+}
+
+.auth-subtitle{
+    margin-top:8px;
+    color:#718096;
+    font-size:.82rem;
+}
+
+.auth-form{
+    display:flex;
+    flex-direction:column;
+    gap:18px;
+}
+
+.auth-field label{
+    display:block;
+    margin-bottom:7px;
+
+    color:#9aa7ba;
+    font-size:.68rem;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.1em;
+}
+
+.auth-input-wrap{
+    position:relative;
+}
+
+.auth-input-icon{
+    position:absolute;
+    left:14px;
+    top:50%;
+    transform:translateY(-50%);
+    opacity:.55;
+    font-size:16px;
+    pointer-events:none;
+}
+
+.auth-input{
+    width:100%;
+    height:50px;
+
+    padding:0 14px 0 44px;
+
+    color:#f8fafc;
+    background:rgba(2,5,12,.68);
+
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:14px;
+
+    outline:none;
+
+    font:inherit;
+    font-size:.86rem;
+
+    transition:.25s ease;
+}
+
+.auth-input::placeholder{
+    color:#4f5d70;
+}
+
+.auth-input:hover{
+    border-color:rgba(167,139,250,.25);
+}
+
+.auth-input:focus{
+    border-color:rgba(139,92,246,.7);
+    background:rgba(2,5,12,.9);
+
+    box-shadow:
+        0 0 0 4px rgba(139,92,246,.09),
+        0 0 30px rgba(139,92,246,.12);
+}
+
+.auth-submit{
+    position:relative;
+    width:100%;
+    height:52px;
+    margin-top:4px;
+
+    border:0;
+    border-radius:14px;
+
+    color:#fff;
+
+    background:
+        linear-gradient(
+            110deg,
+            #6d28d9,
+            #8b5cf6,
+            #ec4899
+        );
+
+    background-size:200% auto;
+
+    font-size:.86rem;
+    font-weight:850;
+
+    cursor:pointer;
+
+    box-shadow:
+        0 12px 30px rgba(124,58,237,.3);
+
+    transition:.3s ease;
+}
+
+.auth-submit:hover{
+    transform:translateY(-2px);
+    background-position:right center;
+
+    box-shadow:
+        0 18px 42px rgba(124,58,237,.42);
+}
+
+.auth-submit:active{
+    transform:scale(.985);
+}
+
+.auth-divider{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    margin:24px 0 18px;
+
+    color:#4f5d70;
+    font-size:.67rem;
+    text-transform:uppercase;
+    letter-spacing:.1em;
+}
+
+.auth-divider::before,
+.auth-divider::after{
+    content:"";
+    height:1px;
+    flex:1;
+    background:rgba(255,255,255,.07);
+}
+
+.auth-footer{
+    text-align:center;
+    color:#64748b;
+    font-size:.78rem;
+}
+
+.auth-footer a{
+    color:#a78bfa;
+    text-decoration:none;
+    font-weight:800;
+}
+
+.auth-footer a:hover{
+    color:#f0abfc;
+}
+
+.auth-status{
+    padding:12px 14px;
+    margin-bottom:18px;
+
+    border-radius:13px;
+
+    font-size:.78rem;
+
+    animation:statusIn .3s ease;
+}
+
+@keyframes statusIn{
+    from{
+        opacity:0;
+        transform:translateY(-6px);
+    }
+    to{
+        opacity:1;
+        transform:none;
+    }
+}
+
+.auth-status.error{
+    color:#fca5a5;
+    background:rgba(239,68,68,.08);
+    border:1px solid rgba(239,68,68,.2);
+}
+
+.auth-status.info{
+    color:#c4b5fd;
+    background:rgba(139,92,246,.08);
+    border:1px solid rgba(139,92,246,.2);
+}
+
+@media(max-width:480px){
+    .auth-page{
+        padding:14px;
+    }
+
+    .auth-card{
+        padding:28px 20px 24px;
+        border-radius:23px;
+    }
+
+    .auth-logo{
+        width:62px;
+        height:62px;
+        font-size:28px;
+    }
+}
+</style>
 </head>
+
 <body>
-    <div class="login-wrap">
-        <div class="login-card">
-            <div class="login-logo">🕷️</div>
-            <h1 class="login-title text-glow">SPIDEY DUMPER</h1>
-            <p class="login-sub">Premium CC/CVC Web Dumper</p>
 
-            {% if error %}
-            <div class="alert alert-error">❌ {{ error }}</div>
-            {% endif %}
+<div class="auth-page">
 
-            {% if msg %}
-            <div class="alert alert-info">ℹ️ {{ msg }}</div>
-            {% endif %}
+    <main class="auth-card">
 
-            <form method="POST" action="/login">
-                <div class="form-group">
-                    <label>👤 Username</label>
-                    <input type="text" name="username" required autofocus
-                           placeholder="Enter username">
-                </div>
-                <div class="form-group">
-                    <label>🔐 Password</label>
-                    <input type="password" name="password" required
-                           placeholder="Enter password">
-                </div>
-                <button type="submit" class="btn btn-primary btn-block">
-                    🚀 LOGIN
-                </button>
-            </form>
+        <div class="auth-brand">
+            <div class="auth-logo">🕷️</div>
 
-            <p class="login-footer">
-                No account? 
-                <a href="/register" style="color: var(--accent);">Register with key</a>
-            </p>
-            <p class="login-footer">
-                💎 Premium Web Dumper — No Flood Ban
+            <h1 class="auth-title">SPIDEY</h1>
+
+            <p class="auth-subtitle">
+                Welcome back. Sign in to continue.
             </p>
         </div>
-    </div>
+
+        {% if error %}
+        <div class="auth-status error">
+            ❌ {{ error }}
+        </div>
+        {% endif %}
+
+        {% if msg %}
+        <div class="auth-status info">
+            ℹ️ {{ msg }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login" class="auth-form">
+
+            <div class="auth-field">
+                <label>Username</label>
+
+                <div class="auth-input-wrap">
+                    <span class="auth-input-icon">👤</span>
+
+                    <input
+                        class="auth-input"
+                        type="text"
+                        name="username"
+                        required
+                        autofocus
+                        autocomplete="username"
+                        placeholder="Enter your username">
+                </div>
+            </div>
+
+            <div class="auth-field">
+                <label>Password</label>
+
+                <div class="auth-input-wrap">
+                    <span class="auth-input-icon">🔐</span>
+
+                    <input
+                        class="auth-input"
+                        type="password"
+                        name="password"
+                        required
+                        autocomplete="current-password"
+                        placeholder="Enter your password">
+                </div>
+            </div>
+
+            <button class="auth-submit" type="submit">
+                SIGN IN &nbsp;→
+            </button>
+
+        </form>
+
+        <div class="auth-divider">
+            New here?
+        </div>
+
+        <div class="auth-footer">
+            Don't have an account?
+            <a href="/register">Create account</a>
+        </div>
+
+    </main>
+
+</div>
+
 </body>
 </html>

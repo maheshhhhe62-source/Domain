@@ -3,18 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard — Spidey</title>
+    <title>Dashboard — Spidey Web Dumper</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🕷️</text></svg>">
 </head>
 <body>
+
+    <!-- Animated background orbs -->
+    <div class="bg-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <!-- NAVBAR -->
     <nav class="navbar">
         <div class="navbar-inner">
             <a href="/dashboard" class="navbar-brand">
                 <span class="navbar-logo">🕷️</span>
-                <span class="navbar-title">SPIDEY</span>
+                <div>
+                    <span class="navbar-title">SPIDEY</span>
+                    <div class="navbar-sub">WEB DUMPER</div>
+                </div>
             </a>
             <div class="navbar-links">
-                <a href="/dashboard" class="navbar-link">🏠 Home</a>
+                <a href="/dashboard" class="navbar-link active">🏠 Home</a>
                 <a href="/keywords" class="navbar-link">🥇 Keywords</a>
                 <a href="/dorks" class="navbar-link">🥈 Dorks</a>
                 <a href="/parser" class="navbar-link">🛰️ Parser</a>
@@ -23,137 +36,155 @@
                 <a href="/files" class="navbar-link">📁 Files</a>
                 <a href="/profile" class="navbar-link">👤 {{ uid }}</a>
                 {% if is_admin %}
-                <a href="/admin" class="navbar-link" style="color: var(--accent);">🧛 Admin</a>
+                <a href="{{ admin_path }}" class="navbar-link navbar-admin">🧛 Admin</a>
                 {% endif %}
-                <a href="/logout" class="navbar-link">🚪</a>
+                <a href="/logout" class="navbar-link navbar-logout">🚪</a>
             </div>
         </div>
     </nav>
 
-    <div class="container">
-        {% if msg %}
-        <div class="alert alert-info">ℹ️ {{ msg }}</div>
-        {% endif %}
-        {% if error %}
-        <div class="alert alert-error">❌ {{ error }}</div>
-        {% endif %}
+    <div class="container-wide">
 
-        <!-- Welcome -->
-        <div class="card" style="margin-bottom: 1.5rem;">
-            <div class="flex justify-between items-center" style="flex-wrap: wrap; gap: 1rem;">
-                <div>
-                    <h1 class="text-glow">👋 Welcome, {{ uid }}</h1>
-                    <p class="card-sub">
-                        Plan: <strong style="color: var(--accent);">{{ plan_label }}</strong> |
-                        Expires: <strong style="color: var(--success);">{{ expiry_str }}</strong>
-                    </p>
+        {% if msg %}<div class="alert alert-info">ℹ️ {{ msg }}</div>{% endif %}
+        {% if error %}<div class="alert alert-error">❌ {{ error }}</div>{% endif %}
+
+        <!-- WELCOME BANNER -->
+        <div class="welcome-banner">
+            <div class="welcome-left">
+                <div class="welcome-badge">
+                    <span class="status-dot"></span>
+                    <span>Online</span>
                 </div>
-                <div>
-                    <a href="/plans" class="btn btn-primary">💎 Upgrade</a>
-                    {% if is_admin %}
-                    <a href="/admin" class="btn btn-secondary">🧛 Admin</a>
-                    {% endif %}
-                </div>
+                <h1 class="text-glow">👋 Welcome back, {{ uid }}</h1>
+                <p class="card-sub" style="margin-top: 0.5rem;">
+                    Plan: <strong style="color: var(--accent-light);">{{ plan_label }}</strong>
+                    <span class="sep">•</span>
+                    Expires: <strong style="color: var(--success);">{{ expiry_str }}</strong>
+                </p>
+            </div>
+            <div class="welcome-right">
+                <a href="/plans" class="btn btn-primary">💎 Upgrade</a>
+                {% if is_admin %}
+                <a href="{{ admin_path }}" class="btn btn-secondary">🧛 Admin</a>
+                {% endif %}
             </div>
         </div>
 
-        <!-- Stats -->
+        <!-- STATS ROW 1 -->
+        <div class="section-header">
+            <span class="section-icon">📊</span>
+            <h2 class="text-glow">Statistics</h2>
+        </div>
         <div class="grid grid-4">
-            <div class="stat-card">
+            <div class="stat-card stat-primary">
                 <div class="stat-icon">🥇</div>
                 <div class="stat-value">{{ stats.keywords }}</div>
                 <div class="stat-label">Keywords</div>
+                <div class="stat-glow"></div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card stat-secondary">
                 <div class="stat-icon">🥈</div>
                 <div class="stat-value">{{ stats.dorks }}</div>
                 <div class="stat-label">Dorks</div>
+                <div class="stat-glow"></div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card stat-tertiary">
                 <div class="stat-icon">🌐</div>
                 <div class="stat-value">{{ stats.urls }}</div>
                 <div class="stat-label">URLs Parsed</div>
+                <div class="stat-glow"></div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card stat-success">
                 <div class="stat-icon">💳</div>
                 <div class="stat-value">{{ stats.cards }}</div>
                 <div class="stat-label">Cards Found</div>
+                <div class="stat-glow"></div>
             </div>
         </div>
 
-        <!-- Second row stats -->
+        <!-- STATS ROW 2 -->
         <div class="grid grid-4" style="margin-top: 1.5rem;">
-            <div class="stat-card">
+            <div class="stat-card stat-warning">
                 <div class="stat-icon">🦠</div>
                 <div class="stat-value">{{ stats.sqli }}</div>
                 <div class="stat-label">SQLi Scanned</div>
+                <div class="stat-glow"></div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card stat-danger">
                 <div class="stat-icon">🕳️</div>
                 <div class="stat-value">{{ stats.dumps }}</div>
                 <div class="stat-label">Dumps</div>
+                <div class="stat-glow"></div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card stat-info">
                 <div class="stat-icon">📋</div>
                 <div class="stat-value">{{ stats.fullz }}</div>
                 <div class="stat-label">Fullz</div>
+                <div class="stat-glow"></div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card stat-cyan">
                 <div class="stat-icon">🌊</div>
                 <div class="stat-value">{{ proxies_count }}</div>
                 <div class="stat-label">Proxies</div>
+                <div class="stat-glow"></div>
             </div>
         </div>
 
-        <!-- Menu -->
-        <h2 style="margin-top: 2.5rem;">🎯 Tools</h2>
-        <div class="grid grid-4" style="margin-top: 1rem;">
-            <a href="/keywords" class="tile">
+        <!-- TOOLS -->
+        <div class="section-header" style="margin-top: 2.5rem;">
+            <span class="section-icon">🎯</span>
+            <h2 class="text-glow">Tools</h2>
+        </div>
+        <div class="grid grid-4">
+            <a href="/keywords" class="tile tile-purple">
                 <div class="tile-icon">🥇</div>
                 <div class="tile-title">Keywords</div>
                 <div class="tile-sub">Generate seeds</div>
             </a>
-            <a href="/dorks" class="tile">
+            <a href="/dorks" class="tile tile-pink">
                 <div class="tile-icon">🥈</div>
                 <div class="tile-title">Dorks</div>
                 <div class="tile-sub">5 types</div>
             </a>
-            <a href="/parser" class="tile">
+            <a href="/parser" class="tile tile-cyan">
                 <div class="tile-icon">🛰️</div>
                 <div class="tile-title">Parser</div>
                 <div class="tile-sub">Dorks → URLs</div>
             </a>
-            <a href="/proxy" class="tile">
+            <a href="/proxy" class="tile tile-blue">
                 <div class="tile-icon">🌊</div>
                 <div class="tile-title">Proxy</div>
                 <div class="tile-sub">Add & Check</div>
             </a>
-            <a href="/sqli" class="tile">
+            <a href="/sqli" class="tile tile-green">
                 <div class="tile-icon">🦠</div>
                 <div class="tile-title">SQLi Scanner</div>
                 <div class="tile-sub">Find vulns</div>
             </a>
-            <a href="/dump" class="tile">
+            <a href="/dump" class="tile tile-red">
                 <div class="tile-icon">🕳️</div>
                 <div class="tile-title">DB Dumper</div>
                 <div class="tile-sub">SQLMap → CC</div>
             </a>
-            <a href="/files" class="tile">
+            <a href="/files" class="tile tile-gold">
                 <div class="tile-icon">📁</div>
                 <div class="tile-title">Files</div>
                 <div class="tile-sub">Downloads</div>
             </a>
-            <a href="/help" class="tile">
+            <a href="/help" class="tile tile-cyan">
                 <div class="tile-icon">🚸</div>
                 <div class="tile-title">Help</div>
                 <div class="tile-sub">Guide</div>
             </a>
         </div>
 
-        <!-- Last Responses -->
+        <!-- RECENT ACTIVITY -->
         {% if last %}
-        <h2 style="margin-top: 2.5rem;">📋 Recent Activity</h2>
-        <div class="card" style="margin-top: 1rem;">
+        <div class="section-header" style="margin-top: 2.5rem;">
+            <span class="section-icon">📋</span>
+            <h2 class="text-glow">Recent Activity</h2>
+        </div>
+        <div class="card">
             <table>
                 <thead>
                     <tr>
@@ -165,15 +196,16 @@
                 <tbody>
                     {% for action, data in last.items() %}
                     <tr>
-                        <td><strong>{{ action }}</strong></td>
+                        <td><strong style="color: var(--accent-light);">{{ action }}</strong></td>
                         <td style="font-size: 0.8rem;">
                             {% for k, v in data.items() %}
                                 {% if k != 'timestamp' %}
-                                    {{ k }}: {{ v }}{% if not loop.last %} | {% endif %}
+                                    <span style="color: var(--text-dim);">{{ k }}:</span>
+                                    <strong>{{ v }}</strong>{% if not loop.last %} <span class="sep">|</span> {% endif %}
                                 {% endif %}
                             {% endfor %}
                         </td>
-                        <td style="font-size: 0.75rem; color: var(--text-dim);">
+                        <td style="font-size: 0.75rem; color: var(--text-muted);">
                             {{ data.timestamp[:19] if data.timestamp else '' }}
                         </td>
                     </tr>
@@ -183,10 +215,17 @@
         </div>
         {% endif %}
 
-        <!-- Footer -->
-        <div class="text-center" style="margin-top: 2rem; padding: 1rem; color: var(--text-dim); font-size: 0.75rem;">
-            🕷️ Spidey Web Dumper v2.0 — Premium Edition
+        <!-- FOOTER -->
+        <div class="footer">
+            <div class="footer-left">
+                <span>🕷️ Spidey Web Dumper v2.0 — Premium Edition</span>
+            </div>
+            <div class="footer-right">
+                <span class="status-dot"></span>
+                <span>All systems operational</span>
+            </div>
         </div>
     </div>
+
 </body>
 </html>
