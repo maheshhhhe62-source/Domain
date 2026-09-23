@@ -1,9 +1,9 @@
 """
-Spidey Core — Proxy Manager (CLEAN v3.0)
+Spidey Core — Proxy Manager (CLEAN v4.0)
 - No duplicate functions
 - Fast live check (5s timeout, HTTP)
 - SOCKS + HTTP support
-- Web storage + manual input
+- Async progress callback (no stuck)
 """
 import os
 import io
@@ -57,12 +57,11 @@ def _is_captcha_page(html: str) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════
 def parse_proxy(proxy_str: str) -> str:
     """
-    Formats:
-      1.2.3.4:8080                → socks5://1.2.3.4:8080
-      1.2.3.4:8080:user:pass      → http://user:pass@1.2.3.4:8080
-      user:pass@1.2.3.4:8080      → http://user:pass@1.2.3.4:8080
-      http://1.2.3.4:8080         → as-is
-      socks5://1.2.3.4:8080       → as-is
+    1.2.3.4:8080                → socks5://1.2.3.4:8080
+    1.2.3.4:8080:user:pass      → http://user:pass@1.2.3.4:8080
+    user:pass@1.2.3.4:8080      → http://user:pass@1.2.3.4:8080
+    http://1.2.3.4:8080         → as-is
+    socks5://1.2.3.4:8080       → as-is
     """
     if not proxy_str:
         return ""
@@ -70,11 +69,9 @@ def parse_proxy(proxy_str: str) -> str:
     if not s:
         return ""
 
-    # Already has scheme
     if s.startswith(("http://", "https://", "socks5://", "socks4://")):
         return s
 
-    # user:pass@host:port
     if "@" in s and ":" in s:
         try:
             up, hp = s.split("@", 1)
@@ -84,12 +81,10 @@ def parse_proxy(proxy_str: str) -> str:
             pass
 
     parts = s.split(":")
-    # host:port:user:pass
     if len(parts) == 4:
         h, p, u, pw = parts
         return f"http://{u}:{pw}@{h}:{p}"
 
-    # host:port → default to socks5
     if len(parts) == 2:
         return f"socks5://{s}"
 
@@ -97,10 +92,6 @@ def parse_proxy(proxy_str: str) -> str:
 
 
 def parse_proxy_text(text: str) -> list:
-    """
-    Multi-line text → list of unique proxies.
-    Skips lines starting with #, ;, [
-    """
     out, seen = [], set()
     for line in text.splitlines():
         line = line.strip()
@@ -120,7 +111,6 @@ def parse_proxy_text(text: str) -> list:
 
 
 def parse_proxy_from_zip(zip_bytes: bytes) -> list:
-    """Extract proxies from ZIP file bytes"""
     out, seen = [], set()
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
@@ -144,7 +134,7 @@ def parse_proxy_from_zip(zip_bytes: bytes) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  STORAGE — per user
+#  STORAGE
 # ═══════════════════════════════════════════════════════════════════════════
 def load_all() -> dict:
     try:
@@ -212,13 +202,13 @@ def clear_proxies(uid: str = "admin") -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  🚀 FAST PROXY LIVE CHECK — 5s timeout, HTTP (single function, no duplicate)
+#  🚀 FAST PROXY LIVE CHECK — Single function, no duplicate
 # ═══════════════════════════════════════════════════════════════════════════
 async def check_proxy_live(proxy_url: str, timeout: float = 5.0) -> bool:
     """
-    🚀 Fast proxy check:
-    - 5s timeout (not 8s)
-    - HTTP test (not HTTPS — faster)
+    Fast proxy check:
+    - 5s timeout
+    - HTTP test (faster than HTTPS)
     - Returns True if status in (200, 301, 302, 403)
     """
     if not proxy_url:
@@ -256,7 +246,7 @@ async def check_proxy_live(proxy_url: str, timeout: float = 5.0) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  🚀 BULK PROXY CHECK — Parallel, no hang
+#  🚀 BULK PROXY CHECK — Parallel, async callback
 # ═══════════════════════════════════════════════════════════════════════════
 async def check_proxies_bulk(
     proxy_list,
@@ -266,14 +256,11 @@ async def check_proxies_bulk(
     task_id: str = None,
 ) -> list:
     """
-    🚀 Check list of proxies in parallel.
-    
-    - timeout: 5s per proxy
-    - concurrency: 300 (parallel)
-    - progress_callback(checked, total, live) — called ~every 1s
-    - task_id: optional, for cancel support
-    
-    Returns: list of LIVE proxies
+    Parallel proxy check:
+    - 300 concurrent
+    - 5s timeout
+    - Async progress callback (no hang)
+    - Cancel support via task_id
     """
     if not proxy_list:
         return []
@@ -286,6 +273,7 @@ async def check_proxies_bulk(
 
     async def _check(px):
         nonlocal checked, live
+        
         # Cancel check
         if task_id:
             try:
@@ -305,7 +293,7 @@ async def check_proxies_bulk(
                 live.append(px)
             checked += 1
             
-            # Progress callback (throttled ~1s)
+            # Progress callback (throttled 1s)
             now = time.time()
             if progress_callback and (now - last_report[0]) >= 1.0:
                 last_report[0] = now
@@ -316,7 +304,6 @@ async def check_proxies_bulk(
                 except Exception:
                     pass
 
-    # ✅ Run ALL in parallel (no batching — 300 concurrency is enough)
     await asyncio.gather(*[_check(p) for p in proxy_list], return_exceptions=True)
 
     # Final callback
@@ -354,15 +341,13 @@ def proxy_stats(uid: str = "admin") -> dict:
 
 
 def _format_proxy_for_aiohttp(proxy: str) -> str:
-    """Format proxy for aiohttp `proxy=` param"""
     if not proxy:
         return ""
     p = proxy.strip()
     if p.startswith(("http://", "https://")):
         return p
     if p.startswith(("socks5://", "socks4://")):
-        return p  # aiohttp doesn't support socks directly
-    # ip:port format
+        return p
     parts = p.split(":")
     if len(parts) == 2:
         return f"http://{parts[0]}:{parts[1]}"
@@ -372,7 +357,7 @@ def _format_proxy_for_aiohttp(proxy: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ASYNC FETCH WRAPPER — for url_finder / sqli
+#  ASYNC FETCH WRAPPER
 # ═══════════════════════════════════════════════════════════════════════════
 async def fetch_with_proxy(
     proxy_url: str,
@@ -380,11 +365,7 @@ async def fetch_with_proxy(
     headers: dict = None,
     timeout: float = 8.0,
 ) -> str:
-    """
-    Fetch URL via proxy. Returns HTML or "" on failure.
-    """
     if not proxy_url:
-        # Direct fetch (no proxy)
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(
@@ -404,7 +385,6 @@ async def fetch_with_proxy(
 
     is_socks = proxy_url.startswith(("socks5://", "socks4://"))
 
-    # SOCKS via separate connector
     if is_socks and _SOCKS_AVAILABLE:
         try:
             conn = _ProxyConnector.from_url(proxy_url, ssl=False)
@@ -424,7 +404,6 @@ async def fetch_with_proxy(
             pass
         return ""
 
-    # HTTP / HTTPS proxy
     try:
         kw = dict(
             headers=headers,
