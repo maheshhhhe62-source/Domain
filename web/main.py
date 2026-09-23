@@ -74,7 +74,13 @@ LAST_RESP_FILE    = os.path.join(DATA_DIR, "last_responses.json")
 # ═══════════════════════════════════════════════════════════════════════════
 app = FastAPI(title="Spidey Web Dumper", docs_url=None, redoc_url=None)
 
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
+import jinja2
+_jinja_env = jinja2.Environment(
+    loader=jinja2.FileSystemLoader(TEMPLATES_DIR),
+    autoescape=jinja2.select_autoescape(['html', 'xml']),
+    cache_size=0,
+)
+templates = Jinja2Templates(env=_jinja_env)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 serializer = URLSafeTimedSerializer(SECRET_KEY)
