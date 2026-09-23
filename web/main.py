@@ -714,6 +714,15 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
     }
     limits = user.get("limits", {})
     proxies = user.get("proxies", [])
+    
+    # 🎯 NEW: Proxy statistics
+    proxies_total = len(proxies)
+    proxy_stats = {
+        "total": proxies_total,
+        "live": proxies_total,  # Live check ke waqt update hoga
+        "dead": 0,
+    }
+    
     expires = user.get("expires")
     expiry_str = "Unlimited" if user.get("is_admin") else "N/A"
     if expires:
@@ -727,15 +736,23 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
         except Exception:
             pass
     last = get_last_response(uid)
+    
+    # 🎯 Get last proxy check result
+    last_proxy_check = get_last_response(uid, "proxy_check")
+    if last_proxy_check:
+        proxy_stats["live"] = last_proxy_check.get("live", proxies_total)
+        proxy_stats["dead"] = proxies_total - proxy_stats["live"]
+    
     return render("dashboard.html", {
         "request": request, "uid": uid, "user": user, "stats": stats,
-        "limits": limits, "proxies_count": len(proxies),
+        "limits": limits, 
+        "proxies_count": proxies_total,
+        "proxy_stats": proxy_stats,  # 🎯 NEW
         "expiry_str": expiry_str, "is_admin": user.get("is_admin", False),
         "plan_label": user.get("plan_label", "Free Trial"),
         "last": last, "msg": msg, "error": error,
         "admin_path": ADMIN_PATH,
     })
-
 
 @app.get("/keywords", response_class=HTMLResponse)
 async def keywords_page(request: Request):
@@ -1101,7 +1118,7 @@ async def api_sqli_scan(request: Request, urls: str = Form(...)):
 
 
 async def _run_sqli(tid: str, uid: str, urls: List[str]):
-    """SQLi Scanner — Same as bot: 80 workers + proxies"""
+    """SQLi Scanner — Fixed Progress & Concurrency"""
     try:
         total = len(urls)
         update_task(tid, status="running")
@@ -1117,8 +1134,9 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
 
         inj = []
         tested = [0]
-        sem = asyncio.Semaphore(80)  # 🎯 BOT JAISA: 80 workers
-        last_edit = [0.0]
+        sem = asyncio.Semaphore(80) 
+        last_edit = [time.time()] # ✅ Initial time set karo
+        
         connector = aiohttp.TCPConnector(
             limit=200, 
             limit_per_host=20,
@@ -1135,17 +1153,18 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                     tested[0] += 1
                     return
                 async with sem:
-                    # 🎯 BOT JAISA: Random proxy rotation
                     px = random.choice(proxies) if proxies else ""
                     try:
+                        # ✅ Proxy rotation check
                         if await _check_injectable(session, url, px):
                             inj.append(url)
                             add_log(tid, f"🎯 VULN: {url[:80]}")
                     except Exception:
                         pass
+                    
                     tested[0] += 1
 
-                    # Progress update
+                    # ✅ PROGRESS FIX: Har 1.5 second mein update karo
                     now = time.time()
                     if now - last_edit[0] > 1.5:
                         last_edit[0] = now
@@ -1155,17 +1174,20 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                             msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
                         )
 
-            # 🎯 BOT JAISA: Batch of 500
+            # 🎯 Batch processing (500 ka batch)
             BATCH = 500
             for i in range(0, len(urls), BATCH):
                 batch = urls[i:i + BATCH]
                 await asyncio.gather(*[_test(u) for u in batch], return_exceptions=True)
-
+                
+                # ✅ Batch ke baad ek baar update (Safety)
                 update_progress(
                     tid,
                     done=tested[0], total=total, found=len(inj),
                     msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
                 )
+                # ✅ Thoda sa sleep taaki server ko saans lene ka mauka mile
+                await asyncio.sleep(0.5) 
 
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"vuln_{len(inj)}_{ts}.txt", "\n".join(inj))
@@ -1187,7 +1209,6 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
     except Exception as e:
         logger.exception(f"[sqli] {e}")
         update_task(tid, status="error", error=str(e))
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — DUMP
