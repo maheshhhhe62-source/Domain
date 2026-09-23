@@ -15,7 +15,7 @@
             </a>
             <div class="navbar-links">
                 <a href="/dashboard" class="navbar-link">🏠</a>
-                <a href="/sqli" class="navbar-link">🦠 SQLi</a>
+                <a href="/sqli" class="navbar-link active">🦠 SQLi</a>
                 <a href="/dump" class="navbar-link">🕳️ Dump</a>
                 <a href="/logout" class="navbar-link">🚪</a>
             </div>
@@ -60,8 +60,16 @@
                 <span id="progressPct">0%</span>
             </div>
             <div class="flex gap-4" style="margin-top: 1rem;">
-                <div class="stat-card" style="flex:1;"><div class="stat-icon">🧪</div><div class="stat-value" id="testedCount">0</div><div class="stat-label">Tested</div></div>
-                <div class="stat-card" style="flex:1;"><div class="stat-icon">🎯</div><div class="stat-value" id="vulnCount" style="color: var(--error);">0</div><div class="stat-label">Vulnerable</div></div>
+                <div class="stat-card" style="flex:1;">
+                    <div class="stat-icon">🧪</div>
+                    <div class="stat-value" id="testedCount">0</div>
+                    <div class="stat-label">Tested</div>
+                </div>
+                <div class="stat-card" style="flex:1;">
+                    <div class="stat-icon">🎯</div>
+                    <div class="stat-value" id="vulnCount" style="color: var(--error);">0</div>
+                    <div class="stat-label">Vulnerable</div>
+                </div>
             </div>
             <div id="logBox" class="log-box" style="margin-top: 1rem;"></div>
         </div>
@@ -81,7 +89,10 @@
             t.className = 'toast ' + type;
             t.textContent = msg;
             c.appendChild(t);
-            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 4000);
+            setTimeout(() => {
+                t.style.opacity = '0';
+                setTimeout(() => t.remove(), 300);
+            }, 4000);
         }
 
         function loadFile(e) {
@@ -95,9 +106,14 @@
         async function runScan() {
             const urls = document.getElementById('urlsInput').value.trim();
             if (!urls) { toast('Paste URLs!', 'error'); return; }
-
+            
             document.getElementById('genBtn').disabled = true;
             document.getElementById('genBtn').textContent = '⏳ Scanning...';
+            document.getElementById('progressBox').classList.remove('hidden');
+            document.getElementById('stopBtn').style.display = 'inline-flex';
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('stopBtn').textContent = '⛔ STOP';
+            document.getElementById('stopBtn').className = 'btn btn-stop';
 
             const fd = new FormData();
             fd.append('urls', urls);
@@ -105,11 +121,18 @@
             try {
                 const r = await fetch('/api/sqli/scan', { method: 'POST', body: fd });
                 const d = await r.json();
-                if (d.error) { toast(d.error, 'error'); reset(); return; }
+                if (d.error) { 
+                    toast(d.error, 'error'); 
+                    reset(); 
+                    return; 
+                }
                 currentTaskId = d.task_id;
-                document.getElementById('stopBtn').style.display = 'inline-flex';
+                toast('Scan started: ' + d.total + ' URLs', 'info');
                 startPolling(d.task_id);
-            } catch (e) { toast('Network error', 'error'); reset(); }
+            } catch (e) { 
+                toast('Network error', 'error'); 
+                reset(); 
+            }
         }
 
         function reset() {
@@ -128,26 +151,29 @@
                 document.getElementById('stopBtn').disabled = true;
                 document.getElementById('stopBtn').textContent = '⛔ STOPPED';
                 if (pollInterval) clearInterval(pollInterval);
-                toast('Scan stopped', 'warning');
+                toast('Stopped', 'warning');
                 reset();
             } catch (e) { toast('Failed', 'error'); }
         }
 
         function startPolling(tid) {
-            document.getElementById('progressBox').classList.remove('hidden');
             if (pollInterval) clearInterval(pollInterval);
+            
             pollInterval = setInterval(async () => {
                 try {
                     const r = await fetch(`/api/task/${tid}`);
+                    if (!r.ok) return;
                     const t = await r.json();
                     if (!t || !t.status) { clearInterval(pollInterval); return; }
 
                     const p = t.progress || {};
-                    const done = p.done || 0, total = p.total || 0, found = p.found || 0;
+                    const done = p.done || 0;
+                    const total = p.total || 0;
+                    const found = p.found || 0;
                     const pct = total ? Math.round(done * 100 / total) : 0;
 
                     document.getElementById('progressBar').style.width = pct + '%';
-                    document.getElementById('progressText').textContent = `${done}/${total} — VULN: ${found}`;
+                    document.getElementById('progressText').textContent = `${done}/${total}`;
                     document.getElementById('progressPct').textContent = pct + '%';
                     document.getElementById('testedCount').textContent = done;
                     document.getElementById('vulnCount').textContent = found;
@@ -168,31 +194,40 @@
                             <h3 style="color: var(--success);">✅ Scan Done!</h3>
                             <p style="margin-top:0.5rem;">Tested: <strong>${res.tested}</strong> | Vulnerable: <strong style="color: var(--error);">${res.vuln}</strong></p>
                             <div style="margin-top: 1rem;">
-                                <a href="/download/${res.file}" class="btn btn-primary">📥 Download Vulnerable URLs</a>
+                                <a href="/download/${res.file}" class="btn btn-primary">📥 Download</a>
                                 <a href="/dump" class="btn btn-success" style="margin-left: 0.5rem;">🕳️ Dump →</a>
                             </div>
                         `;
                         toast('Scan complete!', 'success');
                         reset();
-                    } else if (t.status === 'error' || t.status === 'cancelled') {
+                    } else if (t.status === 'error') {
                         clearInterval(pollInterval);
-                        toast('Task ' + t.status, t.status === 'cancelled' ? 'warning' : 'error');
+                        toast('Error: ' + (t.error || 'unknown'), 'error');
+                        reset();
+                    } else if (t.status === 'cancelled') {
+                        clearInterval(pollInterval);
+                        toast('Cancelled', 'warning');
                         reset();
                     }
-                } catch (e) {}
-            }, 1200);
+                } catch (e) {
+                    console.error('Poll error:', e);
+                }
+            }, 1500);
         }
 
+        // Auto-resume agar page refresh hua
         window.addEventListener('DOMContentLoaded', async () => {
             try {
                 const r = await fetch('/api/tasks/active');
                 const d = await r.json();
                 if (d.task_id) {
                     currentTaskId = d.task_id;
-                    document.getElementById('stopBtn').style.display = 'inline-flex';
                     document.getElementById('genBtn').disabled = true;
+                    document.getElementById('genBtn').textContent = '⏳ Scanning...';
+                    document.getElementById('progressBox').classList.remove('hidden');
+                    document.getElementById('stopBtn').style.display = 'inline-flex';
                     startPolling(d.task_id);
-                    toast('Resumed active task', 'info');
+                    toast('Resumed active scan', 'info');
                 }
             } catch (e) {}
         });
