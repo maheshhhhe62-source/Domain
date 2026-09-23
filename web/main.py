@@ -1,5 +1,5 @@
 """
-Aloneeop Web Dumper — FastAPI Backend
+Spidey Web Dumper — FastAPI Backend
 Full UI with 20+ pages, multi-user, live progress, proxy rotation
 + 10 Levels of Security
 """
@@ -40,7 +40,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger("Aloneeop_web")
+logger = logging.getLogger("spidey_web")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -61,9 +61,9 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 # ═══════════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
-SECRET_KEY        = os.environ.get("SECRET_KEY", "Aloneeop-web-secret-change-this-123")
+SECRET_KEY        = os.environ.get("SECRET_KEY", "spidey-web-secret-change-this-123")
 ADMIN_USERNAME    = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "AloneeopPass123!")
+ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "SpideyPass123!")
 SESSION_MAX_AGE   = 86400 * 7
 DEFAULT_TRIAL_HRS = int(os.environ.get("TRIAL_HOURS", "24"))
 
@@ -106,7 +106,7 @@ SESSIONS = {}
 # ═══════════════════════════════════════════════════════════════════════════
 #  APP INIT
 # ═══════════════════════════════════════════════════════════════════════════
-app = FastAPI(title="Aloneeop Web Dumper", docs_url=None, redoc_url=None)
+app = FastAPI(title="Spidey Web Dumper", docs_url=None, redoc_url=None)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -400,7 +400,7 @@ def verify_session_token(token: str) -> Optional[str]:
 
 
 def get_current_user(request: Request) -> Optional[str]:
-    token = request.cookies.get("Aloneeop_session")
+    token = request.cookies.get("spidey_session")
     if not token:
         return None
     if token in SESSIONS:
@@ -619,7 +619,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
 
     resp = RedirectResponse("/dashboard", status_code=302)
     resp.set_cookie(
-        "Aloneeop_session", token,
+        "spidey_session", token,
         httponly=True,
         secure=True,             # Level 7: HTTPS only
         max_age=SESSION_MAX_AGE,
@@ -630,13 +630,13 @@ async def login_submit(request: Request, username: str = Form(...), password: st
 
 @app.get("/logout")
 async def logout(request: Request):
-    token = request.cookies.get("Aloneeop_session")
+    token = request.cookies.get("spidey_session")
     if token and token in SESSIONS:
         uid = SESSIONS[token]["uid"]
         SESSIONS.pop(token, None)
         logger.info(f"[logout] {uid}")
     resp = RedirectResponse("/login?msg=Logged+out", status_code=302)
-    resp.delete_cookie("Aloneeop_session")
+    resp.delete_cookie("spidey_session")
     return resp
 
 
@@ -1481,7 +1481,7 @@ async def admin_stats(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 @app.on_event("startup")
 async def on_startup():
-    logger.info("🕷️  Aloneeop Web Dumper starting...")
+    logger.info("🕷️  Spidey Web Dumper starting...")
     logger.info(f"📁 Data dir: {DATA_DIR}")
     logger.info(f"📁 Output dir: {OUTPUT_DIR}")
     logger.info(f"🛡️  Security: {len(ALLOWED_IPS)} IPs whitelisted" if ALLOWED_IPS else "🛡️  No IP whitelist")
@@ -1500,12 +1500,12 @@ async def on_startup():
             try: cleanup_old_tasks(max_age_hours=6)
             except Exception: pass
     asyncio.create_task(_cleaner())
-    logger.info("✅ Aloneeop Web Dumper ready")
+    logger.info("✅ Spidey Web Dumper ready")
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    logger.info("🕷️  Aloneeop  shutting down...")
+    logger.info("🕷️  Spidey shutting down...")
     try:
         from core.sqlmap_api import stop_api_server        stop_api_server()
     except Exception: pass
