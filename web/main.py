@@ -1,6 +1,7 @@
 """
 Spidey Web Dumper — FastAPI Backend
 Full UI with 20+ pages, multi-user, live progress, proxy rotation
+BOT JAISA KAAM KAREGA — Saare futures included
 """
 import os
 import io
@@ -24,7 +25,7 @@ from fastapi import (
     Depends, Cookie, Response, BackgroundTasks
 )
 from fastapi.responses import (
-    HTMLResponse, JSONResponse, FileResponse, RedirectResponse, StreamingResponse
+    HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -56,12 +57,12 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  CONFIG (from env)
+#  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
-SECRET_KEY        = os.environ.get("SECRET_KEY", "spidey-web-please-change-me-123")
+SECRET_KEY        = os.environ.get("SECRET_KEY", "spidey-web-secret-change-this")
 ADMIN_USERNAME    = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "spidey123")
-SESSION_MAX_AGE   = 86400 * 7  # 7 days
+SESSION_MAX_AGE   = 86400 * 7
 DEFAULT_TRIAL_HRS = int(os.environ.get("TRIAL_HOURS", "24"))
 
 USERS_FILE        = os.path.join(DATA_DIR, "web_users.json")
@@ -74,7 +75,7 @@ LAST_RESP_FILE    = os.path.join(DATA_DIR, "last_responses.json")
 # ═══════════════════════════════════════════════════════════════════════════
 app = FastAPI(title="Spidey Web Dumper", docs_url=None, redoc_url=None)
 
-# Jinja2 setup — simple, working version
+# Simple Jinja2 — no env objects (prevents dict error)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -82,15 +83,22 @@ serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TEMPLATE HELPER — works with both old and new signature
+#  TEMPLATE RENDER — backward-compatible + modern API
 # ═══════════════════════════════════════════════════════════════════════════
 def render(name: str, ctx: dict):
-    """Unified template render helper. Always pass context as dict."""
-    return templates.TemplateResponse(name, ctx)
+    """Unified render helper — works across Starlette versions."""
+    # Ensure request is in context
+    if "request" not in ctx:
+        raise ValueError(f"render() called without request in context for {name}")
+    return templates.TemplateResponse(
+        request=ctx["request"],
+        name=name,
+        context=ctx,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  USER STORAGE
+#  JSON HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 def _load_json(path: str, default):
     try:
@@ -108,6 +116,9 @@ def _save_json(path: str, data):
         logger.error(f"save_json {path}: {e}")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  USER STORAGE
+# ═══════════════════════════════════════════════════════════════════════════
 def load_users() -> dict:
     d = _load_json(USERS_FILE, {})
     if not isinstance(d, dict):
@@ -176,7 +187,7 @@ def generate_license_key() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  LAST RESPONSE STORAGE (per user)
+#  LAST RESPONSE
 # ═══════════════════════════════════════════════════════════════════════════
 def load_last_responses() -> dict:
     d = _load_json(LAST_RESP_FILE, {})
@@ -187,10 +198,7 @@ def save_last_response(uid: str, action: str, data: dict):
     d = load_last_responses()
     if uid not in d:
         d[uid] = {}
-    d[uid][action] = {
-        **data,
-        "timestamp": datetime.now().isoformat(),
-    }
+    d[uid][action] = {**data, "timestamp": datetime.now().isoformat()}
     _save_json(LAST_RESP_FILE, d)
 
 
@@ -203,7 +211,7 @@ def get_last_response(uid: str, action: str = None) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TASK SYSTEM (live progress)
+#  TASK SYSTEM
 # ═══════════════════════════════════════════════════════════════════════════
 TASKS: Dict[str, dict] = {}
 TASKS_LOCK = asyncio.Lock()
@@ -212,19 +220,11 @@ TASKS_LOCK = asyncio.Lock()
 def new_task(uid: str, task_type: str, meta: dict = None) -> str:
     tid = secrets.token_urlsafe(12)
     TASKS[tid] = {
-        "id": tid,
-        "uid": uid,
-        "type": task_type,
-        "status": "starting",
-        "started": datetime.now().isoformat(),
-        "progress": {
-            "done": 0, "total": 0, "found": 0, "live": 0,
-            "cards": 0, "fullz": 0,
-            "msg": "Starting...", "log": [],
-        },
-        "result": None,
-        "error": None,
-        "meta": meta or {},
+        "id": tid, "uid": uid, "type": task_type,
+        "status": "starting", "started": datetime.now().isoformat(),
+        "progress": {"done": 0, "total": 0, "found": 0, "live": 0,
+                     "cards": 0, "fullz": 0, "msg": "Starting...", "log": []},
+        "result": None, "error": None, "meta": meta or {},
     }
     return tid
 
@@ -278,7 +278,7 @@ def verify_session_token(token: str) -> Optional[str]:
     try:
         data = serializer.loads(token, max_age=SESSION_MAX_AGE)
         return data.get("u")
-    except (BadSignature, Exception):
+    except Exception:
         return None
 
 
@@ -315,7 +315,7 @@ def require_admin(request: Request) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  QUOTA HELPERS
+#  QUOTA
 # ═══════════════════════════════════════════════════════════════════════════
 def check_quota(uid: str, action: str, amount: int = 1):
     user = get_user(uid)
@@ -344,7 +344,7 @@ def consume_quota(uid: str, action: str, amount: int = 1):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  PROXY HELPERS
+#  PROXY
 # ═══════════════════════════════════════════════════════════════════════════
 def get_user_proxies(uid: str) -> List[str]:
     user = get_user(uid)
@@ -497,7 +497,6 @@ async def register_submit(request: Request, username: str = Form(...), password:
     token = create_session_token(username)
     resp = RedirectResponse("/dashboard", status_code=302)
     resp.set_cookie("spidey_session", token, httponly=True, max_age=SESSION_MAX_AGE, samesite="lax")
-    logger.info(f"[register] {username}")
     return resp
 
 
@@ -543,7 +542,7 @@ async def redeem_submit(request: Request, license_key: str = Form(...)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — DASHBOARD
+#  ROUTES — PAGES
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, msg: str = None, error: str = None):
@@ -567,9 +566,7 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
             dt = datetime.fromisoformat(expires)
             delta = dt - datetime.now()
             if delta.total_seconds() > 0:
-                days_left = delta.days
-                hours_left = int((delta.total_seconds() % 86400) // 3600)
-                expiry_str = f"{days_left}d {hours_left}h left"
+                expiry_str = f"{delta.days}d {int((delta.total_seconds() % 86400) // 3600)}h left"
             else:
                 expiry_str = "EXPIRED"
         except Exception:
@@ -638,6 +635,53 @@ async def files_page(request: Request):
     if get_user(uid).get("is_admin"):
         user_files = files
     return render("files.html", {"request": request, "uid": uid, "files": user_files})
+
+
+@app.get("/proxy", response_class=HTMLResponse)
+async def proxy_page(request: Request):
+    uid = require_user(request)
+    proxies = get_user_proxies(uid)
+    return render("proxy.html", {"request": request, "uid": uid, "proxies": proxies, "count": len(proxies)})
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    uid = require_user(request)
+    user = get_user(uid)
+    return render("settings.html", {
+        "request": request, "uid": uid, "user": user,
+        "sqlmap_defaults": {"level": 3, "risk": 2, "threads": 10,
+                            "technique": "BEUSTQ",
+                            "tamper": "space2comment,between,charencode", "crawl": 0},
+    })
+
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    uid = require_user(request)
+    user = get_user(uid)
+    last_all = get_last_response(uid)
+    return render("profile.html", {"request": request, "uid": uid, "user": user, "last": last_all})
+
+
+@app.get("/plans", response_class=HTMLResponse)
+async def plans_page(request: Request):
+    uid = require_user(request)
+    return render("plans.html", {"request": request, "uid": uid, "plans": PLANS})
+
+
+@app.get("/help", response_class=HTMLResponse)
+async def help_page(request: Request):
+    uid = require_user(request)
+    return render("help.html", {"request": request, "uid": uid})
+
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs_page(request: Request):
+    uid = require_user(request)
+    user_tasks = [t for t in TASKS.values() if t["uid"] == uid]
+    user_tasks.sort(key=lambda x: x["started"], reverse=True)
+    return render("logs.html", {"request": request, "uid": uid, "tasks": user_tasks[:50]})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -773,15 +817,8 @@ async def _run_parser(tid: str, uid: str, dorks: List[str]):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — PROXY
+#  API — PROXY
 # ═══════════════════════════════════════════════════════════════════════════
-@app.get("/proxy", response_class=HTMLResponse)
-async def proxy_page(request: Request):
-    uid = require_user(request)
-    proxies = get_user_proxies(uid)
-    return render("proxy.html", {"request": request, "uid": uid, "proxies": proxies, "count": len(proxies)})
-
-
 @app.post("/api/proxy/add")
 async def api_proxy_add(request: Request, proxies: str = Form("")):
     uid = require_user(request)
@@ -894,7 +931,7 @@ async def api_proxy_list(request: Request):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — SQLI
+#  API — SQLI
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/sqli/scan")
 async def api_sqli_scan(request: Request, urls: str = Form(...)):
@@ -960,16 +997,14 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — DUMP
+#  API — DUMP
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/dump/run")
-async def api_dump_run(
-    request: Request,
-    urls: str = Form(...),
-    level: int = Form(3), risk: int = Form(2), threads: int = Form(10),
-    technique: str = Form("BEUSTQ"), tamper: str = Form("space2comment,between,charencode"),
-    crawl: int = Form(0),
-):
+async def api_dump_run(request: Request, urls: str = Form(...), level: int = Form(3),
+                       risk: int = Form(2), threads: int = Form(10),
+                       technique: str = Form("BEUSTQ"),
+                       tamper: str = Form("space2comment,between,charencode"),
+                       crawl: int = Form(0)):
     uid = require_user(request)
     url_list = [u.strip() for u in urls.splitlines() if u.strip().startswith(("http://", "https://"))]
     if not url_list:
@@ -1082,7 +1117,7 @@ async def api_task_cancel(request: Request, tid: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — DOWNLOAD
+#  ROUTES — DOWNLOAD / FILES
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/download/{fname}")
 async def download_file(request: Request, fname: str):
@@ -1116,20 +1151,8 @@ async def api_files_delete(request: Request, fname: str = Form(...)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — SETTINGS / PROFILE / PLANS / HELP / LOGS
+#  API — SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════
-@app.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
-    uid = require_user(request)
-    user = get_user(uid)
-    return render("settings.html", {
-        "request": request, "uid": uid, "user": user,
-        "sqlmap_defaults": {"level": 3, "risk": 2, "threads": 10,
-                            "technique": "BEUSTQ",
-                            "tamper": "space2comment,between,charencode", "crawl": 0},
-    })
-
-
 @app.post("/api/settings/password")
 async def api_settings_password(request: Request, old_password: str = Form(...), new_password: str = Form(...)):
     uid = require_user(request)
@@ -1143,34 +1166,6 @@ async def api_settings_password(request: Request, old_password: str = Form(...),
     users[uid]["password"] = new_password
     save_users(users)
     return {"ok": True}
-
-
-@app.get("/profile", response_class=HTMLResponse)
-async def profile_page(request: Request):
-    uid = require_user(request)
-    user = get_user(uid)
-    last_all = get_last_response(uid)
-    return render("profile.html", {"request": request, "uid": uid, "user": user, "last": last_all})
-
-
-@app.get("/plans", response_class=HTMLResponse)
-async def plans_page(request: Request):
-    uid = require_user(request)
-    return render("plans.html", {"request": request, "uid": uid, "plans": PLANS})
-
-
-@app.get("/help", response_class=HTMLResponse)
-async def help_page(request: Request):
-    uid = require_user(request)
-    return render("help.html", {"request": request, "uid": uid})
-
-
-@app.get("/logs", response_class=HTMLResponse)
-async def logs_page(request: Request):
-    uid = require_user(request)
-    user_tasks = [t for t in TASKS.values() if t["uid"] == uid]
-    user_tasks.sort(key=lambda x: x["started"], reverse=True)
-    return render("logs.html", {"request": request, "uid": uid, "tasks": user_tasks[:50]})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1301,7 +1296,8 @@ async def admin_broadcast_page(request: Request, msg: str = None):
 async def admin_broadcast_send(request: Request, subject: str = Form(...), message: str = Form(...)):
     uid = require_admin(request)
     bcast_file = os.path.join(DATA_DIR, "broadcast.json")
-    _save_json(bcast_file, {"subject": subject, "message": message, "sent_at": datetime.now().isoformat(), "sent_by": uid})
+    _save_json(bcast_file, {"subject": subject, "message": message,
+                            "sent_at": datetime.now().isoformat(), "sent_by": uid})
     return RedirectResponse("/admin/broadcast?msg=Broadcast+sent", status_code=302)
 
 
