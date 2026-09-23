@@ -966,7 +966,7 @@ async def api_sqli_scan(request: Request, urls: str = Form(...)):
     return {"task_id": tid}
 
 async def _run_sqli(tid: str, uid: str, urls: List[str]):
-    """🎯 FIX: SQLi Scanner — 80 workers, batch 500, 6s timeout (bot jaisa)"""
+    """🎯 FIXED SQLi Scanner — Fast, no hang"""
     try:
         total = len(urls)
         update_task(tid, status="running")
@@ -976,75 +976,69 @@ async def _run_sqli(tid: str, uid: str, urls: List[str]):
         proxies = get_user_proxies(uid)
         add_log(tid, f"Using {len(proxies)} proxies")
 
-        from core.sqli import _check_injectable
-        import aiohttp
-        import random
+        # ✅ STEP 1: Filter live proxies (agar 5+ hain)
+        if len(proxies) >= 5:
+            add_log(tid, "⚡ Filtering live proxies...")
+            update_progress(tid, msg="Filtering live proxies...")
+            try:
+                from core.proxy import check_proxies_bulk
+                live = await check_proxies_bulk(proxies, timeout=5.0, concurrency=300)
+                add_log(tid, f"✅ Live: {len(live)}/{len(proxies)}")
+                proxies = live if live else []
+                if not proxies:
+                    add_log(tid, "⚠️ No live proxies — running direct")
+            except Exception as e:
+                add_log(tid, f"⚠️ Filter failed: {str(e)[:60]}")
+                proxies = []
 
-        inj = []
-        tested = [0]
-        sem = asyncio.Semaphore(80)  # 🎯 FIX 1: 80 workers (bot jaisa)
-        last_edit = [0.0]
-        connector = aiohttp.TCPConnector(
-            limit=200, limit_per_host=20, ssl=False,
-            ttl_dns_cache=300, force_close=True,
+        add_log(tid, f"Starting scan with {len(proxies)} proxies")
+
+        # ✅ STEP 2: Use check_urls_bulk (NOT _check_injectable)
+        from core.sqli import check_urls_bulk
+        last_edit = [time.time()]
+        
+        async def on_prog(done, total, found):
+            if is_cancelled(tid):
+                return
+            now = time.time()
+            if now - last_edit[0] >= 1.0:
+                last_edit[0] = now
+                update_progress(
+                    tid, done=done, total=total, found=found,
+                    msg=f"Tested {done}/{total} | VULN {found}",
+                )
+        
+        update_progress(tid, msg=f"Scanning {total} URLs...")
+        
+        inj = await check_urls_bulk(
+            urls,
+            proxies=proxies,
+            concurrency=80,
+            timeout=6.0,
+            progress_callback=on_prog,
+            task_id=tid,
         )
 
-        async with aiohttp.ClientSession(
-            connector=connector,
-            timeout=aiohttp.ClientTimeout(total=6, connect=3, sock_read=5),  # 🎯 FIX 3: 6s timeout
-        ) as session:
-            async def _test(url):
-                if not url:
-                    tested[0] += 1
-                    return
-                if is_cancelled(tid):
-                    return
-                async with sem:
-                    px = random.choice(proxies) if proxies else ""
-                    try:
-                        if await _check_injectable(session, url, px):
-                            inj.append(url)
-                            add_log(tid, f"🎯 VULN: {url[:80]}")
-                    except Exception:
-                        pass
-                    tested[0] += 1
-                    now = time.time()
-                    if now - last_edit[0] > 1.5:
-                        last_edit[0] = now
-                        update_progress(
-                            tid, done=tested[0], total=total, found=len(inj),
-                            msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
-                        )
-
-            BATCH = 500  # 🎯 FIX 2: 500 batch (bot jaisa)
-            for i in range(0, len(urls), BATCH):
-                if is_cancelled(tid):
-                    add_log(tid, "⛔ Cancelled")
-                    update_progress(tid, msg="⛔ Cancelled")
-                    return
-                batch = urls[i:i + BATCH]
-                await asyncio.gather(*[_test(u) for u in batch], return_exceptions=True)
-                update_progress(
-                    tid, done=tested[0], total=total, found=len(inj),
-                    msg=f"Tested {tested[0]}/{total} | VULN {len(inj)}",
-                )
-
         if is_cancelled(tid):
+            add_log(tid, "⛔ Cancelled")
+            update_progress(tid, msg="⛔ Cancelled")
             return
 
+        # ✅ Save results
         ts = datetime.now().strftime("%d%m%y_%H%M%S")
         fname = save_output(uid, f"vuln_{len(inj)}_{ts}.txt", "\n".join(inj))
         consume_quota(uid, "sqli", total)
         save_last_response(uid, "sqli", {"tested": total, "vuln": len(inj), "file": fname})
         update_task(tid, status="done", result={"tested": total, "vuln": len(inj), "file": fname})
-        update_progress(tid, done=total, total=total, found=len(inj), msg="Done!")
+        update_progress(tid, done=total, total=total, found=len(inj), msg="✅ Done!")
         add_log(tid, f"✅ Found {len(inj)} vulnerable URLs")
     except asyncio.CancelledError:
-        add_log(tid, "⛔ Task cancelled")
+        add_log(tid, "⛔ Cancelled")
         update_progress(tid, msg="⛔ Cancelled")
     except Exception as e:
         logger.exception(f"[sqli] {e}")
         update_task(tid, status="error", error=str(e))
+        add_log(tid, f"❌ Error: {str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  API — DUMP
@@ -1072,6 +1066,11 @@ async def api_dump_run(request: Request, urls: str = Form(...), level: int = For
     asyncio.create_task(_run_dump(tid, uid, url_list, level, risk, threads, technique, tamper, crawl))
     return {"task_id": tid}
 
+
+
+
+        
+        
 async def _run_dump(tid, uid, urls, level, risk, threads, technique, tamper, crawl):
     try:
         update_task(tid, status="running")
