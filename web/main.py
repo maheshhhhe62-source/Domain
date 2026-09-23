@@ -1507,7 +1507,8 @@ async def on_startup():
 async def on_shutdown():
     logger.info("🕷️  Spidey shutting down...")
     try:
-        from core.sqlmap_api import stop_api_server        stop_api_server()
+        from core.sqlmap_api import stop_api_server
+        stop_api_server()
     except Exception: pass
 
 
